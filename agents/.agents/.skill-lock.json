@@ -1,0 +1,178 @@
+{
+  "version": 3,
+  "skills": {
+    "web-design-guidelines": {
+      "source": "vercel-labs/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/vercel-labs/agent-skills.git",
+      "skillPath": "skills/web-design-guidelines/SKILL.md",
+      "skillFolderHash": "3116f3e62dbd02b44a598b1aa690d2a8938e8f89",
+      "installedAt": "2026-03-17T17:36:34.809Z",
+      "updatedAt": "2026-03-25T17:54:35.673Z"
+    },
+    "frontend-design": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/anthropics/skills.git",
+      "skillPath": "skills/frontend-design/SKILL.md",
+      "skillFolderHash": "928950704df8a8b885c03de5da626331e6f29cf8",
+      "pluginName": "example-skills",
+      "installedAt": "2026-03-17T17:37:21.917Z",
+      "updatedAt": "2026-03-25T17:51:49.896Z"
+    },
+    "use-modern-go": {
+      "source": "JetBrains/go-modern-guidelines",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/JetBrains/go-modern-guidelines.git",
+      "skillPath": "claude/modern-go-guidelines/skills/use-modern-go/SKILL.md",
+      "skillFolderHash": "e44d45d26b32ec08c949a365f2ef44ed27f5572f",
+      "installedAt": "2026-03-17T17:38:11.234Z",
+      "updatedAt": "2026-03-25T17:53:49.024Z"
+    },
+    "ai-coding-discipline": {
+      "source": "luoling8192/ai-coding-principles",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/luoling8192/ai-coding-principles.git",
+      "skillPath": "ai-coding-discipline/SKILL.md",
+      "skillFolderHash": "83302c031bde408134f611f5700d0f1df3b9e051",
+      "installedAt": "2026-03-25T16:11:03.251Z",
+      "updatedAt": "2026-03-25T17:49:26.974Z"
+    },
+    "ddia-principles": {
+      "source": "luoling8192/ai-coding-principles",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/luoling8192/ai-coding-principles.git",
+      "skillPath": "ddia-principles/SKILL.md",
+      "skillFolderHash": "92abd55236470c16f7a4a9b0dd5a2940cdb1857f",
+      "installedAt": "2026-03-25T16:11:03.791Z",
+      "updatedAt": "2026-03-25T17:49:27.495Z"
+    },
+    "agent-browser": {
+      "source": "vercel-labs/agent-browser",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/vercel-labs/agent-browser.git",
+      "skillPath": "skills/agent-browser/SKILL.md",
+      "skillFolderHash": "2406f5d1c14a6727a0b628bf84e7485e0f76f8de",
+      "installedAt": "2026-03-25T17:47:43.301Z",
+      "updatedAt": "2026-03-28T15:15:20.650Z"
+    },
+    "brainstorming": {
+      "source": "obra/superpowers",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/obra/superpowers.git",
+      "skillPath": "skills/brainstorming/SKILL.md",
+      "skillFolderHash": "f260c775073816860fef8a37c032ac77e2ff5821",
+      "installedAt": "2026-03-25T17:50:19.505Z",
+      "updatedAt": "2026-03-28T15:15:27.313Z"
+    },
+    "find-skills": {
+      "source": "vercel-labs/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/vercel-labs/skills.git",
+      "skillPath": "skills/find-skills/SKILL.md",
+      "skillFolderHash": "3013fdeb8a11b10b1eb795ec3ae8bfca38f7c26d",
+      "installedAt": "2026-03-25T17:50:42.773Z",
+      "updatedAt": "2026-03-25T17:50:42.773Z"
+    },
+    "claude-api": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/anthropics/skills.git",
+      "skillPath": "skills/claude-api/SKILL.md",
+      "skillFolderHash": "5a67769c8d12b9eb00c840ccc9e74a37d9d2a3c9",
+      "pluginName": "claude-api",
+      "installedAt": "2026-03-25T17:51:48.804Z",
+      "updatedAt": "2026-03-25T17:51:48.804Z"
+    },
+    "skill-creator": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/anthropics/skills.git",
+      "skillPath": "skills/skill-creator/SKILL.md",
+      "skillFolderHash": "98a510d1cfef9f82c3b1eec200229ca68725e613",
+      "pluginName": "example-skills",
+      "installedAt": "2026-03-25T17:51:49.303Z",
+      "updatedAt": "2026-03-25T17:51:49.303Z"
+    },
+    "onevcat-jj": {
+      "source": "onevcat/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/onevcat/skills.git",
+      "skillPath": "skills/onevcat-jj/SKILL.md",
+      "skillFolderHash": "d078a9a9557dde921f5e8ee8d1f62c89a304aec6",
+      "installedAt": "2026-03-25T17:52:08.486Z",
+      "updatedAt": "2026-03-25T17:52:08.486Z"
+    },
+    "shadcn": {
+      "source": "shadcn/ui",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/shadcn/ui.git",
+      "skillPath": "skills/shadcn/SKILL.md",
+      "skillFolderHash": "bf9e83da91320f445f2c27f65067009f344f757a",
+      "installedAt": "2026-03-25T17:52:27.674Z",
+      "updatedAt": "2026-03-25T17:52:27.674Z"
+    },
+    "software-design-philosophy": {
+      "source": "luoling8192/software-design-philosophy-skill",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/luoling8192/software-design-philosophy-skill.git",
+      "skillPath": "SKILL.md",
+      "skillFolderHash": "e55ac385e89913a6d53c7da460d080982d32ea03",
+      "installedAt": "2026-03-25T17:52:43.265Z",
+      "updatedAt": "2026-03-25T17:52:43.265Z"
+    },
+    "tailwind-design-system": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/wshobson/agents.git",
+      "skillPath": "plugins/frontend-mobile-development/skills/tailwind-design-system/SKILL.md",
+      "skillFolderHash": "a8532caa4b6284a92c686bc9346c274e6e66aaa5",
+      "installedAt": "2026-03-25T17:53:02.387Z",
+      "updatedAt": "2026-03-28T15:15:32.547Z"
+    },
+    "test-driven-development": {
+      "source": "obra/superpowers",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/obra/superpowers.git",
+      "skillPath": "skills/test-driven-development/SKILL.md",
+      "skillFolderHash": "98904a7d8e0e04b9bd46220b9b17298f45fe0b72",
+      "installedAt": "2026-03-25T17:53:23.283Z",
+      "updatedAt": "2026-03-25T17:53:23.283Z"
+    },
+    "vercel-react-best-practices": {
+      "source": "vercel-labs/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/vercel-labs/agent-skills.git",
+      "skillPath": "skills/react-best-practices/SKILL.md",
+      "skillFolderHash": "bd8feeee219216aac928d1d8e5c61a928dba23dc",
+      "installedAt": "2026-03-25T17:54:34.640Z",
+      "updatedAt": "2026-03-25T17:54:34.640Z"
+    },
+    "vercel-composition-patterns": {
+      "source": "vercel-labs/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/vercel-labs/agent-skills.git",
+      "skillPath": "skills/composition-patterns/SKILL.md",
+      "skillFolderHash": "bf90d0a4b83ea054653350f9c67f6de235d3a368",
+      "installedAt": "2026-03-25T17:54:35.163Z",
+      "updatedAt": "2026-03-25T17:54:35.163Z"
+    }
+  },
+  "dismissed": {
+    "findSkillsPrompt": true
+  },
+  "lastSelectedAgents": [
+    "amp",
+    "antigravity",
+    "cline",
+    "codex",
+    "cursor",
+    "deepagents",
+    "gemini-cli",
+    "github-copilot",
+    "kimi-cli",
+    "opencode",
+    "warp",
+    "claude-code"
+  ]
+}

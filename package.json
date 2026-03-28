@@ -1,0 +1,24 @@
+{
+  "name": "agentry",
+  "version": "0.1.0",
+  "description": "AI coding agent configuration",
+  "keywords": [
+    "pi-package",
+    "ai-agent",
+    "coding-agent",
+    "rtk"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-agent-core": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "@sinclair/typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "pi-package/extensions"
+    ]
+  }
+}

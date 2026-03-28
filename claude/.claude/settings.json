@@ -1,0 +1,18 @@
+{
+  "env": {
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "$HOME/.claude/hooks/rtk-rewrite.sh",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ]
+  }
+}
