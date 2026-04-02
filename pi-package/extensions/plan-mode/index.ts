@@ -20,8 +20,8 @@ import { Type } from "@sinclair/typebox";
 import { extractTodoItems, isSafeCommand, type TodoItem } from "./utils.js";
 
 // Tools
-const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "questionnaire"];
-const NORMAL_MODE_TOOLS = ["read", "bash", "edit", "write"];
+const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "questionnaire", "web_fetch"];
+const NORMAL_MODE_TOOLS = ["read", "bash", "edit", "write", "questionnaire", "web_fetch"];
 const EXECUTION_MODE_TOOLS = [...NORMAL_MODE_TOOLS, "mark_done"];
 
 // Type guard for assistant messages

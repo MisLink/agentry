@@ -6,7 +6,7 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth } from "@mariozechner/pi-tui";
+import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 
 // Types
@@ -108,7 +108,10 @@ export default function questionnaire(pi: ExtensionAPI) {
 				let cachedLines: string[] | undefined;
 				const answers = new Map<string, Answer>();
 
-				// Editor for "Type something" option
+				// Editor for "Type something" option.
+				// disableSubmit = true: prevent Editor from consuming Enter so we can
+				// intercept it ourselves — Enter submits the answer, Shift+Enter adds
+				// a newline, matching the answer.ts / QnAComponent convention.
 				const editorTheme: EditorTheme = {
 					borderColor: (s) => theme.fg("accent", s),
 					selectList: {
@@ -120,6 +123,7 @@ export default function questionnaire(pi: ExtensionAPI) {
 					},
 				};
 				const editor = new Editor(tui, editorTheme);
+				editor.disableSubmit = true;
 
 				// Helpers
 				function refresh() {
@@ -167,25 +171,30 @@ export default function questionnaire(pi: ExtensionAPI) {
 					answers.set(questionId, { id: questionId, value, label, wasCustom, index });
 				}
 
-				// Editor submit callback
-				editor.onSubmit = (value) => {
+				function submitEditorAnswer() {
 					if (!inputQuestionId) return;
-					const trimmed = value.trim() || "(no response)";
+					const trimmed = editor.getText().trim() || "(no response)";
 					saveAnswer(inputQuestionId, trimmed, trimmed, true);
 					inputMode = false;
 					inputQuestionId = null;
 					editor.setText("");
 					advanceAfterAnswer();
-				};
+				}
 
 				function handleInput(data: string) {
-					// Input mode: route to editor
+					// Input mode: route to editor, intercept Enter/Esc ourselves.
 					if (inputMode) {
 						if (matchesKey(data, Key.escape)) {
 							inputMode = false;
 							inputQuestionId = null;
 							editor.setText("");
 							refresh();
+							return;
+						}
+						// Enter (without Shift) → submit answer.
+						// Shift+Enter → let the editor insert a real newline.
+						if (matchesKey(data, Key.enter) && !matchesKey(data, Key.shift("enter"))) {
+							submitEditorAnswer();
 							return;
 						}
 						editor.handleInput(data);
@@ -313,7 +322,11 @@ export default function questionnaire(pi: ExtensionAPI) {
 
 					// Content
 					if (inputMode && q) {
-						add(theme.fg("text", ` ${q.prompt}`));
+						// Wrap long prompts so the full question is visible. [step 4]
+						const promptWidth = width - 1;
+						for (const wrapped of wrapTextWithAnsi(theme.fg("text", q.prompt), promptWidth)) {
+							add(` ${wrapped}`);
+						}
 						lines.push("");
 						// Show options for reference
 						renderOptions();
@@ -323,7 +336,7 @@ export default function questionnaire(pi: ExtensionAPI) {
 							add(` ${line}`);
 						}
 						lines.push("");
-						add(theme.fg("dim", " Enter to submit • Esc to cancel"));
+						add(theme.fg("dim", " Enter submit • Shift+Enter newline • Esc cancel"));
 					} else if (currentTab === questions.length) {
 						add(theme.fg("accent", theme.bold(" Ready to submit")));
 						lines.push("");
@@ -345,7 +358,11 @@ export default function questionnaire(pi: ExtensionAPI) {
 							add(theme.fg("warning", ` Unanswered: ${missing}`));
 						}
 					} else if (q) {
-						add(theme.fg("text", ` ${q.prompt}`));
+						// Wrap long prompts so the full question is visible. [step 4]
+						const promptWidth = width - 1;
+						for (const wrapped of wrapTextWithAnsi(theme.fg("text", q.prompt), promptWidth)) {
+							add(` ${wrapped}`);
+						}
 						lines.push("");
 						renderOptions();
 					}
