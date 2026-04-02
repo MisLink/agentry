@@ -16,11 +16,13 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, TextContent } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Key } from "@mariozechner/pi-tui";
-import { extractTodoItems, isSafeCommand, markCompletedSteps, type TodoItem } from "./utils.js";
+import { Type } from "@sinclair/typebox";
+import { extractTodoItems, isSafeCommand, type TodoItem } from "./utils.js";
 
 // Tools
 const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "questionnaire"];
 const NORMAL_MODE_TOOLS = ["read", "bash", "edit", "write"];
+const EXECUTION_MODE_TOOLS = [...NORMAL_MODE_TOOLS, "mark_done"];
 
 // Type guard for assistant messages
 function isAssistantMessage(m: AgentMessage): m is AssistantMessage {
@@ -96,6 +98,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			ctx.ui.notify("Plan mode disabled. Full access restored.");
 		}
 		updateStatus(ctx);
+		persistState();
 	}
 
 	let lastPersistedState = "";
@@ -106,9 +109,66 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		pi.appendEntry("plan-mode", JSON.parse(state));
 	}
 
+	pi.registerTool({
+		name: "mark_done",
+		label: "Mark Step Done",
+		description: "Mark a plan step as completed. Call this immediately after finishing each step during plan execution.",
+		promptSnippet: "mark_done(step) - report a plan step as completed",
+		parameters: Type.Object({
+			step: Type.Number({ description: "The step number to mark as completed" }),
+			summary: Type.Optional(Type.String({ description: "Brief summary of what was accomplished (optional)" })),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			if (!executionMode || todoItems.length === 0) {
+				return {
+					content: [{ type: "text", text: "No plan is currently being executed." }],
+					details: { success: false },
+				};
+			}
+			const item = todoItems.find((t) => t.step === params.step);
+			if (!item) {
+				return {
+					content: [{ type: "text", text: `Step ${params.step} not found in current plan.` }],
+					details: { success: false },
+				};
+			}
+			if (item.completed) {
+				return {
+					content: [{ type: "text", text: `Step ${params.step} is already marked complete.` }],
+					details: { success: true, step: params.step, alreadyDone: true },
+				};
+			}
+			item.completed = true;
+			updateStatus(ctx);
+			persistState();
+			const message = params.summary
+				? `✓ Step ${params.step} complete: ${params.summary}`
+				: `✓ Step ${params.step} marked complete.`;
+			return {
+				content: [{ type: "text", text: message }],
+				details: { success: true, step: params.step },
+			};
+		},
+	});
+
 	pi.registerCommand("plan", {
-		description: "Toggle plan mode (read-only exploration)",
-		handler: async (_args, ctx) => togglePlanMode(ctx),
+		description: "Toggle plan mode, or submit a plan request: /plan <message>",
+		handler: async (args, ctx) => {
+			const message = args?.trim();
+			if (!message) {
+				return togglePlanMode(ctx);
+			}
+			// Enable plan mode silently if not already active
+			if (!planModeEnabled) {
+				planModeEnabled = true;
+				executionMode = false;
+				todoItems = [];
+				pi.setActiveTools(PLAN_MODE_TOOLS);
+				updateStatus(ctx);
+				persistState();
+			}
+			pi.sendUserMessage(message);
+		},
 	});
 
 	pi.registerCommand("done", {
@@ -135,7 +195,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			item.completed = true;
 			updateStatus(ctx);
 			persistState();
-			ctx.ui.notify(`✓ Step ${n} marked complete.`, "success");
+			ctx.ui.notify(`✓ Step ${n} marked complete.`, "info");
 		},
 	});
 
@@ -238,23 +298,11 @@ Remaining steps:
 ${todoList}
 
 Execute each step in order.
-After completing a step, include a [DONE:n] tag in your response.`,
+After completing each step, call mark_done(step) to record your progress.`,
 					display: false,
 				},
 			};
 		}
-	});
-
-	// Track progress after each turn
-	pi.on("turn_end", async (event, ctx) => {
-		if (!executionMode || todoItems.length === 0) return;
-		if (!isAssistantMessage(event.message)) return;
-
-		const text = getTextContent(event.message);
-		if (markCompletedSteps(text, todoItems) > 0) {
-			updateStatus(ctx);
-		}
-		persistState();
 	});
 
 	// Handle plan completion and plan mode UI
@@ -309,7 +357,7 @@ After completing a step, include a [DONE:n] tag in your response.`,
 		if (choice?.startsWith("Execute")) {
 			planModeEnabled = false;
 			executionMode = todoItems.length > 0;
-			pi.setActiveTools(NORMAL_MODE_TOOLS);
+			pi.setActiveTools(executionMode ? EXECUTION_MODE_TOOLS : NORMAL_MODE_TOOLS);
 			updateStatus(ctx);
 
 			const execMessage =
@@ -347,34 +395,10 @@ After completing a step, include a [DONE:n] tag in your response.`,
 			executionMode = planModeEntry.data.executing ?? executionMode;
 		}
 
-		// On resume: re-scan messages to rebuild completion state
-		// Only scan messages AFTER the last "plan-mode-execute" to avoid picking up [DONE:n] from previous plans
-		const isResume = planModeEntry !== undefined;
-		if (isResume && executionMode && todoItems.length > 0) {
-			// Find the index of the last plan-mode-execute entry (marks when current execution started)
-			let executeIndex = -1;
-			for (let i = entries.length - 1; i >= 0; i--) {
-				const entry = entries[i] as { type: string; customType?: string };
-				if (entry.customType === "plan-mode-execute") {
-					executeIndex = i;
-					break;
-				}
-			}
-
-			// Only scan messages after the execute marker
-			const messages: AssistantMessage[] = [];
-			for (let i = executeIndex + 1; i < entries.length; i++) {
-				const entry = entries[i];
-				if (entry.type === "message" && "message" in entry && isAssistantMessage(entry.message as AgentMessage)) {
-					messages.push(entry.message as AssistantMessage);
-				}
-			}
-			const allText = messages.map(getTextContent).join("\n");
-			markCompletedSteps(allText, todoItems);
-		}
-
 		if (planModeEnabled) {
 			pi.setActiveTools(PLAN_MODE_TOOLS);
+		} else if (executionMode) {
+			pi.setActiveTools(EXECUTION_MODE_TOOLS);
 		}
 		updateStatus(ctx);
 	});
