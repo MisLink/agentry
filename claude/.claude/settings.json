@@ -5,14 +5,17 @@
   "hooks": {
     "PreToolUse": [
       {
+        "matcher": "Bash",
         "hooks": [
           {
-            "command": "$HOME/.claude/hooks/rtk-rewrite.sh",
-            "type": "command"
+            "type": "command",
+            "command": "$HOME/.claude/hooks/rtk-rewrite.sh"
           }
-        ],
-        "matcher": "Bash"
+        ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "gopls-lsp@claude-plugins-official": true
   }
 }
