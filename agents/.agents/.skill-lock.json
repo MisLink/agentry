@@ -168,11 +168,11 @@
     "codex",
     "cursor",
     "deepagents",
+    "firebender",
     "gemini-cli",
     "github-copilot",
     "kimi-cli",
     "opencode",
-    "warp",
-    "claude-code"
+    "warp"
   ]
 }
