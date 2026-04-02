@@ -1,2 +1,4 @@
 node_modules/
 pi/.pi/agent/models.json
+__pycache__/
+skills/*-workspace/

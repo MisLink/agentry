@@ -1,0 +1,96 @@
+{
+  "skill_name": "vcs-commit",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "帮我提交当前的更改",
+      "expected_output": "Skill detects git repo, analyzes staged changes, notices README is unrelated to main feature change, asks user whether to include it, then generates a Conventional Commits message with Chinese description and proposes it before running git commit.",
+      "files": [],
+      "setup": "git repo with staged src/auth.js (new JWT feature) and staged README.md (unrelated changelog entry)",
+      "assertions": [
+        {
+          "id": "asks-about-readme",
+          "description": "Asks user whether to include README.md before committing, because it is unrelated to the main feature"
+        },
+        {
+          "id": "correct-type-feat",
+          "description": "Proposes commit type `feat` (new functionality being added)"
+        },
+        {
+          "id": "correct-scope-auth",
+          "description": "Uses scope `auth` matching the changed module"
+        },
+        {
+          "id": "chinese-description",
+          "description": "Commit description is written in Chinese"
+        },
+        {
+          "id": "confirms-before-commit",
+          "description": "Shows proposed message and waits for user confirmation before running git commit"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "帮我 commit 一下",
+      "expected_output": "Skill detects jj repo, analyzes diff showing a bug fix in auth module, generates fix(auth): <Chinese description>, confirms with user, then runs jj describe -m ...",
+      "files": [],
+      "setup": "jj (colocated) repo with changes to src/auth/session.ts fixing null reference errors",
+      "assertions": [
+        {
+          "id": "detects-jj-repo",
+          "description": "Detects .jj/ directory and uses jj commands (jj status, jj diff) instead of git"
+        },
+        {
+          "id": "correct-type-fix",
+          "description": "Proposes commit type `fix` (bug fix, not a new feature)"
+        },
+        {
+          "id": "correct-scope-auth",
+          "description": "Uses scope `auth` matching the changed module"
+        },
+        {
+          "id": "chinese-description",
+          "description": "Commit description is written in Chinese"
+        },
+        {
+          "id": "uses-jj-describe",
+          "description": "Uses `jj describe -m` (not `git commit` or `jj commit`) after confirmation"
+        },
+        {
+          "id": "confirms-before-commit",
+          "description": "Shows proposed message and waits for user confirmation"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "commit 一下",
+      "expected_output": "Skill detects git repo, finds no staged files but unstaged changes exist, informs user and asks which files to include (does NOT silently stage everything), waits for guidance.",
+      "files": [],
+      "setup": "git repo with unstaged changes in app.py (new feature + refactor) and config.py (config tweak), nothing in staging area",
+      "assertions": [
+        {
+          "id": "does-not-silently-stage",
+          "description": "Does NOT silently run git add -A or stage files without asking"
+        },
+        {
+          "id": "informs-user-nothing-staged",
+          "description": "Informs user that nothing is staged and shows what unstaged files exist"
+        },
+        {
+          "id": "notices-multi-concern",
+          "description": "Notices or mentions that app.py and config.py have different concerns (feature vs config change)"
+        },
+        {
+          "id": "asks-what-to-include",
+          "description": "Asks the user which files to include rather than making the decision unilaterally"
+        },
+        {
+          "id": "no-premature-commit",
+          "description": "Does not attempt to run git commit before the user decides what to stage"
+        }
+      ]
+    }
+  ]
+}
