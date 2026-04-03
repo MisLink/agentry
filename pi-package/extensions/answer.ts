@@ -122,6 +122,7 @@ class QnAComponent implements Component, Focusable {
       selectList: {
         selectedPrefix: (t) => theme.fg("accent", t),
         selectedText: (t) => theme.fg("accent", t),
+        description: (t) => theme.fg("dim", t),
         scrollInfo: (t) => theme.fg("dim", t),
         noMatch: (t) => theme.fg("warning", t),
       },
@@ -368,10 +369,8 @@ async function answerHandler(
       const doExtract = async () => {
         const auth =
           await ctx.modelRegistry.getApiKeyAndHeaders(extractionModel)
-        if (!auth.ok || !auth.apiKey)
-          throw new Error(
-            auth.ok ? `No API key for ${extractionModel.provider}` : auth.error
-          )
+        if (!auth.ok)
+          throw new Error(auth.error)
 
         const userMessage: UserMessage = {
           role: "user",

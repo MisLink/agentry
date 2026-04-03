@@ -10,8 +10,8 @@
   ],
   "license": "MIT",
   "peerDependencies": {
-    "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-agent-core": "*",
+    "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-tui": "*",
     "@sinclair/typebox": "*"
@@ -20,5 +20,8 @@
     "extensions": [
       "pi-package/extensions"
     ]
+  },
+  "devDependencies": {
+    "typescript": "^6.0.2"
   }
 }

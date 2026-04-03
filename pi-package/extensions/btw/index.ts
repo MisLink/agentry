@@ -47,6 +47,7 @@ import {
 	extractAssistantText,
 	extractStreamedText,
 	getLastAssistantMessage,
+	summarise,
 } from "./session.js";
 import { BtwOverlay, formatUsage } from "./overlay.js";
 

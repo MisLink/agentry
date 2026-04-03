@@ -320,17 +320,14 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
   });
 
   // Reset per-session state on all session lifecycle events.
-  for (const ev of [
-    "session_start",
-    "session_switch",
-    "session_fork",
-    "session_tree",
-  ] as const) {
-    pi.on(ev, async () => {
-      state.resetSession();
-      clearProjectRootCache();
-    });
-  }
+  const resetSession = async () => {
+    state.resetSession();
+    clearProjectRootCache();
+  };
+  pi.on("session_start", resetSession);
+  pi.on("session_switch", resetSession);
+  pi.on("session_fork", resetSession);
+  pi.on("session_tree", resetSession);
 
   // ── CLI flag ──────────────────────────────────────────────────────────────
 

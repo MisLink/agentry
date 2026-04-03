@@ -130,7 +130,7 @@ export class BtwOverlay extends Container implements Focusable {
 			return;
 		}
 		// selectCancel keybinding (or plain Esc via the Input's onEscape above).
-		if (this.keybindings.matches(data, "selectCancel")) {
+		if (this.keybindings.matches(data, "tui.select.cancel")) {
 			this.handleEscape();
 			return;
 		}

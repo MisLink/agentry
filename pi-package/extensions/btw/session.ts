@@ -24,6 +24,7 @@ import {
 	type ResourceLoader,
 } from "@mariozechner/pi-coding-agent";
 import { complete, type UserMessage, type AssistantMessage, type Message } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { BtwThread } from "./thread.js";
 
 // ─── System prompts ───────────────────────────────────────────────────────────
@@ -90,8 +91,8 @@ function buildSeedMessages(
 	ctx: ExtensionContext,
 	thread: BtwThread,
 	onWarn: (msg: string) => void,
-): Message[] {
-	const seed: Message[] = [];
+): AgentMessage[] {
+	const seed: AgentMessage[] = [];
 	try {
 		const { messages } = buildSessionContext(
 			ctx.sessionManager.getEntries(),
