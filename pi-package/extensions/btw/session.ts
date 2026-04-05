@@ -200,7 +200,7 @@ export class SideSessionManager {
 
 		const seed = buildSeedMessages(ctx, thread, onWarn);
 		if (seed.length > 0) {
-			session.agent.replaceMessages(seed as typeof session.state.messages);
+			session.agent.state.messages = seed as typeof session.state.messages;
 		}
 
 		const unsubscribe = session.subscribe(onEvent);

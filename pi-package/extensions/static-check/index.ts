@@ -325,8 +325,6 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
     clearProjectRootCache();
   };
   pi.on("session_start", resetSession);
-  pi.on("session_switch", resetSession);
-  pi.on("session_fork", resetSession);
   pi.on("session_tree", resetSession);
 
   // ── CLI flag ──────────────────────────────────────────────────────────────

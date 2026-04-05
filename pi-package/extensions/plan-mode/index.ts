@@ -6,7 +6,7 @@
  *
  * Features:
  * - /plan command or Ctrl+Alt+P to toggle
- * - Bash restricted to allowlisted read-only commands
+ * - Bash restricted to a denylist (blocks file writes; allows commands, tests, builds)
  * - Extracts numbered plan steps from "Plan:" sections
  * - [DONE:n] markers to complete steps during execution
  * - Progress tracking widget during execution
@@ -14,7 +14,7 @@
 
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, TextContent } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import { Key } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { extractTodoItems, isSafeCommand, type TodoItem } from "./utils.js";
@@ -41,6 +41,9 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	let planModeEnabled = false;
 	let executionMode = false;
 	let todoItems: TodoItem[] = [];
+	let skipConfirmations = false;
+	/** Entry ID recorded when plan mode activates — used by /run-plan to navigate back. */
+	let planOriginId: string | undefined = undefined;
 
 	pi.registerFlag("plan", {
 		description: "Start in plan mode (read-only exploration)",
@@ -84,6 +87,14 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 				`${remaining} step${remaining > 1 ? "s" : ""} not yet complete. Discard progress?`,
 			);
 			if (!ok) return;
+		}
+
+		// Record origin when enabling so /run-plan can navigate back to a clean context later
+		if (!planModeEnabled) {
+			const entries = ctx.sessionManager.getBranch();
+			planOriginId = entries.length > 0 ? entries[entries.length - 1].id : undefined;
+		} else {
+			planOriginId = undefined;
 		}
 
 		planModeEnabled = !planModeEnabled;
@@ -144,6 +155,33 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			const message = params.summary
 				? `✓ Step ${params.step} complete: ${params.summary}`
 				: `✓ Step ${params.step} marked complete.`;
+
+			// Pause for confirmation when step-by-step mode is active
+			const remaining = todoItems.filter((t) => !t.completed);
+			if (remaining.length > 0 && !skipConfirmations) {
+				const nextStep = remaining[0];
+				const choice = await ctx.ui.select(
+					`${message}\n\nNext: Step ${nextStep.step} — ${nextStep.text}`,
+					["Continue", "Run all remaining", "Stop here", "Give feedback before continuing"],
+				);
+				if (choice === "Run all remaining") {
+					skipConfirmations = true;
+				} else if (choice === "Stop here") {
+					ctx.abort();
+					return {
+						content: [{ type: "text", text: `${message}\n\nExecution paused by user.` }],
+						details: { success: true, step: params.step, paused: true },
+					};
+				} else if (choice?.startsWith("Give feedback")) {
+					const feedback = await ctx.ui.input("Feedback for next step:");
+					const feedbackText = feedback?.trim() ? `\nUser feedback for next step: ${feedback.trim()}` : "";
+					return {
+						content: [{ type: "text", text: `${message}${feedbackText}` }],
+						details: { success: true, step: params.step },
+					};
+				}
+			}
+
 			return {
 				content: [{ type: "text", text: message }],
 				details: { success: true, step: params.step },
@@ -160,6 +198,8 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			}
 			// Enable plan mode silently if not already active
 			if (!planModeEnabled) {
+				const entries = ctx.sessionManager.getBranch();
+				planOriginId = entries.length > 0 ? entries[entries.length - 1].id : undefined;
 				planModeEnabled = true;
 				executionMode = false;
 				todoItems = [];
@@ -211,6 +251,53 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		},
 	});
 
+	pi.registerCommand("run-plan", {
+		description: "在干净的 context 中执行当前计划（回溯到规划开始前，过滤探索噪音）",
+		handler: async (_args, ctx: ExtensionCommandContext) => {
+			if (todoItems.length === 0) {
+				ctx.ui.notify("没有待执行的计划，先用 /plan 创建一个。", "error");
+				return;
+			}
+			if (!planOriginId) {
+				ctx.ui.notify("未记录规划起点，无法回溯。请直接执行或重新进入 plan 模式。", "error");
+				return;
+			}
+
+			const runMode = await ctx.ui.select(
+				`在干净 context 中执行 ${todoItems.length} 个步骤，如何执行？`,
+				["逐步执行（每步暂停确认）", "一次性运行全部步骤"],
+			);
+			if (!runMode) return;
+			skipConfirmations = runMode === "一次性运行全部步骤";
+
+			planModeEnabled = false;
+			executionMode = true;
+			pi.setActiveTools(EXECUTION_MODE_TOOLS);
+			updateStatus(ctx);
+
+			const stepsList = todoItems.map((t) => `${t.step}. ${t.fullText ?? t.text}`).join("\n");
+			const execMessage = `请按以下计划执行：\n\n${stepsList}`;
+
+			const originId = planOriginId;
+			planOriginId = undefined;
+
+			const result = await ctx.navigateTree(originId);
+			if (result.cancelled) {
+				executionMode = false;
+				planOriginId = originId; // restore on cancel
+				pi.setActiveTools(NORMAL_MODE_TOOLS);
+				updateStatus(ctx);
+				return;
+			}
+
+			persistState();
+			pi.sendMessage(
+				{ customType: "plan-mode-execute", content: execMessage, display: true },
+				{ triggerTurn: true },
+			);
+		},
+	});
+
 	pi.registerShortcut(Key.ctrlAlt("p"), {
 		description: "Toggle plan mode",
 		handler: async (ctx) => togglePlanMode(ctx),
@@ -224,7 +311,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		if (!isSafeCommand(command)) {
 			return {
 				block: true,
-				reason: `Plan mode: command blocked (not allowlisted). Use /plan to disable plan mode first.\nCommand: ${command}`,
+				reason: `Plan mode: command blocked (would modify files or system state). Use /plan to disable plan mode first.\nCommand: ${command}`,
 			};
 		}
 	});
@@ -317,6 +404,8 @@ After completing each step, call mark_done(step) to record your progress.`,
 				);
 				executionMode = false;
 				todoItems = [];
+				skipConfirmations = false;
+				planOriginId = undefined;
 				pi.setActiveTools(NORMAL_MODE_TOOLS);
 				updateStatus(ctx);
 				persistState(); // Save cleared state so resume doesn't restore old execution mode
@@ -360,6 +449,25 @@ After completing each step, call mark_done(step) to record your progress.`,
 			pi.setActiveTools(executionMode ? EXECUTION_MODE_TOOLS : NORMAL_MODE_TOOLS);
 			updateStatus(ctx);
 
+			if (executionMode) {
+				// When a plan origin is recorded, offer clean-context execution via /run-plan
+				if (planOriginId) {
+					const contextMode = await ctx.ui.select(
+						`执行 ${todoItems.length} 个步骤，选择执行方式：`,
+						["在当前上下文中执行（保留规划对话）", "在干净上下文中执行（输入 /run-plan）"],
+					);
+					if (contextMode?.includes("/run-plan")) {
+						ctx.ui.notify("输入 /run-plan 在干净的 context 中开始执行计划", "info");
+						return;
+					}
+				}
+				const runMode = await ctx.ui.select(
+					`Ready to execute ${todoItems.length} step${todoItems.length !== 1 ? "s" : ""}. How?`,
+					["Step by step (pause after each step)", "Run all steps"],
+				);
+				skipConfirmations = runMode === "Run all steps";
+			}
+
 			const execMessage =
 				todoItems.length > 0
 					? `Execute the plan. Start with: ${todoItems[0].text}`
@@ -400,6 +508,8 @@ After completing each step, call mark_done(step) to record your progress.`,
 		} else if (executionMode) {
 			pi.setActiveTools(EXECUTION_MODE_TOOLS);
 		}
+		skipConfirmations = false; // always start fresh — user can choose again when executing
+		planOriginId = undefined;  // origin is only valid within the current session branch
 		updateStatus(ctx);
 	});
 }
