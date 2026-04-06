@@ -1,7 +1,7 @@
 keys:
   - &primary ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKnH3JJcsZnksInIdffC18IkcI2IGxnvyQBv3j+/MHsm
 creation_rules:
-  - path_regex: \.pi/agent/models\.enc\.json$
+  - path_regex: \.pi/agent/.+\.json$
     key_groups:
       - age:
           - *primary

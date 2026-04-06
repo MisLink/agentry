@@ -1,4 +1,5 @@
 node_modules/
 pi/.pi/agent/models.json
+pi/.pi/agent/telegram.json
 __pycache__/
 skills/*-workspace/

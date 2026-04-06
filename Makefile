@@ -8,5 +8,10 @@ install: decrypt
 uninstall:
 	stow --target=$(HOME) -v -D $(STOW_DIRS)
 
-decrypt:
-	sops decrypt pi/.pi/agent/models.enc.json > pi/.pi/agent/models.json
+enc_files := pi/.pi/agent/models.enc.json pi/.pi/agent/telegram.enc.json
+decrypted_files := $(patsubst %.enc.json,%.json,$(enc_files))
+
+$(decrypted_files): %.json: %.enc.json
+	sops decrypt $< > $@
+
+decrypt: $(decrypted_files)

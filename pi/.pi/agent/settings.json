@@ -1,0 +1,16 @@
+{
+  "lastChangelogVersion": "0.65.0",
+  "defaultProvider": "github-copilot",
+  "defaultModel": "claude-haiku-4.5",
+  "defaultThinkingLevel": "medium",
+  "packages": [
+    "~/projects/agentry",
+    "git:github.com/badlogic/pi-telegram"
+  ],
+  "hideThinkingBlock": false,
+  "theme": "dark",
+  "transport": "auto",
+  "showHardwareCursor": true,
+  "treeFilterMode": "default",
+  "doubleEscapeAction": "tree"
+}
