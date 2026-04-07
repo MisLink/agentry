@@ -156,6 +156,15 @@
       "skillFolderHash": "bf90d0a4b83ea054653350f9c67f6de235d3a368",
       "installedAt": "2026-03-25T17:54:35.163Z",
       "updatedAt": "2026-03-25T17:54:35.163Z"
+    },
+    "playwright-cli": {
+      "source": "microsoft/playwright-cli",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/microsoft/playwright-cli.git",
+      "skillPath": "skills/playwright-cli/SKILL.md",
+      "skillFolderHash": "a45a2cf6381af0007a8d88d3b95f798565ffc5a5",
+      "installedAt": "2026-04-07T12:55:18.151Z",
+      "updatedAt": "2026-04-07T12:55:18.151Z"
     }
   },
   "dismissed": {
