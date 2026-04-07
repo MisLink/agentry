@@ -1,6 +1,7 @@
 .PHONY: install uninstall decrypt
+default: install
 
-STOW_DIRS := $(filter-out pi-package/ node_modules/, $(wildcard */))
+STOW_DIRS := $(filter-out pi-package/ node_modules/ skills/, $(wildcard */))
 
 install: decrypt
 	stow --target=$(HOME) -v -R $(STOW_DIRS)
