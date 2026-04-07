@@ -1,7 +1,7 @@
 {
   "lastChangelogVersion": "0.65.0",
   "defaultProvider": "github-copilot",
-  "defaultModel": "claude-haiku-4.5",
+  "defaultModel": "gpt-5.4",
   "defaultThinkingLevel": "medium",
   "packages": [
     "~/projects/agentry",
