@@ -1,17 +1,19 @@
 /**
  * Notify Extension
  *
- * Sends a rich notification when pi finishes a turn and is waiting for input.
+ * Sends a desktop notification when pi finishes a turn and is waiting for input.
  * The notification body contains a plain-text summary of the last LLM response.
  *
  * Terminal support (in priority order):
- *   - Kitty     — `kitten notify` (rich: app name, body preview, urgency, type)
- *   - Windows   — PowerShell toast  (WT_SESSION)
+ *   - Kitty     — OSC 99 via `kitten notify --only-print-escape-code`
+ *   - Windows   — PowerShell toast (WT_SESSION)
  *   - Ghostty / iTerm2 / WezTerm — OSC 777
  *   - Others    — terminal bell (BEL)
  *
- * Kitty's `kitten notify` supports --app-name, --urgency, --type, --expire-after,
- * --icon, --button, etc. and works transparently over SSH.
+ * NOTE: `kitten notify` without `--only-print-escape-code` opens /dev/tty
+ * directly, which fails inside pi's extension environment (no controlling
+ * terminal). We use `--only-print-escape-code` to capture the OSC 99
+ * escape sequence and write it to process.stdout ourselves.
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -96,26 +98,46 @@ function buildPayload(lastText: string | null): NotificationPayload {
 // ── Notification backends ──────────────────────────────────────────────────
 
 /**
- * Kitty: use `kitten notify` for full desktop notification support.
- * Supports app-name, type (for user filter rules), urgency, icon,
- * expire-after, and works over SSH transparently.
- * kitten is always available when KITTY_WINDOW_ID is set.
+ * Kitty: generate OSC 99 escape sequence via `kitten notify --only-print-escape-code`,
+ * then write it to stdout ourselves.
+ *
+ * We cannot use plain `kitten notify` because it opens /dev/tty directly,
+ * which is unavailable inside pi's extension subprocess environment.
  */
 function notifyKitten(title: string, body: string): void {
 	execFile(
 		"kitten",
 		[
 			"notify",
+			"--only-print-escape-code",
 			"--app-name=pi",
-			"--type=pi-agent-ready", // users can create filter rules based on this
+			"--type=pi-agent-ready",
 			"--urgency=normal",
 			"--expire-after=30s",
 			title,
 			body,
 		],
 		{ timeout: 5000 },
-		// fire-and-forget: ignore errors silently
+		(error, stdout) => {
+			if (error || !stdout) {
+				// Fallback: raw OSC 99 without kitten
+				notifyOSC99(title, body);
+				return;
+			}
+			process.stdout.write(stdout);
+		},
 	);
+}
+
+/**
+ * Raw OSC 99 (kitty desktop notification protocol).
+ * Fallback when `kitten` command is unavailable.
+ * Uses the simple single-payload form (title only, body appended).
+ */
+function notifyOSC99(title: string, body: string): void {
+	const text = body ? `${title}: ${body}` : title;
+	// d=0 means complete (non-chunked) notification
+	process.stdout.write(`\x1b]99;d=0;${text}\x1b\\`);
 }
 
 /** Windows Terminal: PowerShell toast notification. */
