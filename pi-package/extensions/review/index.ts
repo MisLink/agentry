@@ -5,6 +5,7 @@
  *
  * 特性：
  * - Session fork：review 在独立 branch 中进行，不污染主 session 的上下文
+ * - 支持 git 和 jj (Jujutsu) 版本控制
  * - 支持审查未提交改动、分支 diff、特定 commit
  * - 注入详细的中文 review rubric（P0-P3 优先级）
  * - 支持项目级 REVIEW_GUIDELINES.md 追加自定义规则
@@ -13,8 +14,8 @@
  * 用法：
  *   /review               — 交互式选择审查目标
  *   /review uncommitted   — 审查未提交改动
- *   /review branch <name> — 审查相对某分支的 diff
- *   /review commit <sha>  — 审查某个 commit
+ *   /review branch <name> — 审查相对某分支/bookmark 的 diff
+ *   /review commit <rev>  — 审查某个 commit/change
  *   /end-review           — 返回主 session（丢弃 review branch）
  *
  * 项目级审查规范：在 .pi 目录所在的项目根放 REVIEW_GUIDELINES.md，
@@ -24,6 +25,15 @@
 import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+
+// ─── VCS Detection ───────────────────────────────────────────────────────────
+
+async function detectVCS(pi: ExtensionAPI): Promise<"git" | "jj"> {
+	// Check jj first; in colocated repos prefer jj for local operations.
+	const { code: jjCode } = await pi.exec("jj", ["--ignore-working-copy", "root"]);
+	if (jjCode === 0) return "jj";
+	return "git";
+}
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -43,6 +53,124 @@ type ReviewTarget =
 	| { type: "uncommitted" }
 	| { type: "baseBranch"; branch: string }
 	| { type: "commit"; sha: string; title?: string };
+
+// ─── VCS-specific Helpers ─────────────────────────────────────────────────────
+
+// --- Git helpers ---
+
+async function gitMergeBase(pi: ExtensionAPI, branch: string): Promise<string | null> {
+	try {
+		const { stdout: upstream, code: upstreamCode } = await pi.exec("git", [
+			"rev-parse", "--abbrev-ref", `${branch}@{upstream}`,
+		]);
+		if (upstreamCode === 0 && upstream.trim()) {
+			const { stdout: mergeBase, code } = await pi.exec("git", ["merge-base", "HEAD", upstream.trim()]);
+			if (code === 0 && mergeBase.trim()) return mergeBase.trim();
+		}
+		const { stdout: mergeBase, code } = await pi.exec("git", ["merge-base", "HEAD", branch]);
+		if (code === 0 && mergeBase.trim()) return mergeBase.trim();
+		return null;
+	} catch {
+		return null;
+	}
+}
+
+async function gitLocalBranches(pi: ExtensionAPI): Promise<string[]> {
+	const { stdout, code } = await pi.exec("git", ["branch", "--format=%(refname:short)"]);
+	if (code !== 0) return [];
+	return stdout.trim().split("\n").filter((b) => b.trim());
+}
+
+async function gitCurrentBranch(pi: ExtensionAPI): Promise<string | null> {
+	const { stdout, code } = await pi.exec("git", ["branch", "--show-current"]);
+	return code === 0 && stdout.trim() ? stdout.trim() : null;
+}
+
+async function gitRecentCommits(
+	pi: ExtensionAPI,
+	limit = 15,
+): Promise<Array<{ sha: string; title: string }>> {
+	const { stdout, code } = await pi.exec("git", ["log", "--oneline", `-n`, `${limit}`]);
+	if (code !== 0) return [];
+	return stdout
+		.trim()
+		.split("\n")
+		.filter((l) => l.trim())
+		.map((line) => {
+			const [sha, ...rest] = line.trim().split(" ");
+			return { sha: sha ?? "", title: rest.join(" ") };
+		});
+}
+
+// --- JJ helpers ---
+
+async function jjCurrentBookmarks(pi: ExtensionAPI): Promise<string[]> {
+	const { stdout, code } = await pi.exec("jj", [
+		"--ignore-working-copy", "bookmark", "list", "-r", "@", "--template", 'name ++ "\\n"',
+	]);
+	if (code !== 0) return [];
+	return [...new Set(stdout.trim().split("\n").filter((b) => b.trim()))];
+}
+
+async function jjBookmarks(pi: ExtensionAPI): Promise<string[]> {
+	const { stdout, code } = await pi.exec("jj", [
+		"--ignore-working-copy", "bookmark", "list", "--template", 'name ++ "\\n"',
+	]);
+	if (code !== 0) return [];
+	return [...new Set(stdout.trim().split("\n").filter((b) => b.trim()))];
+}
+
+async function jjRecentChanges(
+	pi: ExtensionAPI,
+	limit = 15,
+): Promise<Array<{ sha: string; title: string }>> {
+	const { stdout, code } = await pi.exec("jj", [
+		"--ignore-working-copy", "log", "--no-graph", `-n`, `${limit}`,
+		"--template",
+		`change_id.shortest() ++ "  " ++ description.first_line() ++ "\\n"`,
+	]);
+	if (code !== 0) return [];
+	return stdout
+		.trim()
+		.split("\n")
+		.filter((l) => l.trim())
+		.map((line) => {
+			const [sha, ...rest] = line.trim().split("  ");
+			return { sha: sha ?? "", title: rest.join("  ").trim() };
+		});
+}
+
+// --- Unified wrappers ---
+
+async function getMergeBase(pi: ExtensionAPI, branch: string): Promise<string | null> {
+	const vcs = await detectVCS(pi);
+	if (vcs === "jj") {
+		// jj: just return the bookmark name — the diff prompt will use `jj diff --from <ref> --to @`
+		return branch;
+	}
+	return gitMergeBase(pi, branch);
+}
+
+async function getLocalBranches(pi: ExtensionAPI): Promise<string[]> {
+	const vcs = await detectVCS(pi);
+	if (vcs === "jj") return jjBookmarks(pi);
+	return gitLocalBranches(pi);
+}
+
+async function getCurrentBranch(pi: ExtensionAPI): Promise<string | null> {
+	const vcs = await detectVCS(pi);
+	if (vcs === "jj") return null;
+	return gitCurrentBranch(pi);
+}
+
+async function getRecentCommits(
+	pi: ExtensionAPI,
+	limit = 15,
+): Promise<Array<{ sha: string; title: string }>> {
+	const vcs = await detectVCS(pi);
+	if (vcs === "jj") return jjRecentChanges(pi, limit);
+	return gitRecentCommits(pi, limit);
+}
 
 // ─── Rubric ───────────────────────────────────────────────────────────────────
 
@@ -181,52 +309,31 @@ async function loadProjectReviewGuidelines(cwd: string): Promise<string | null> 
 	}
 }
 
-/** Compute the merge base between HEAD and a branch (tries upstream first). */
-async function getMergeBase(pi: ExtensionAPI, branch: string): Promise<string | null> {
-	try {
-		const { stdout: upstream, code: upstreamCode } = await pi.exec("git", [
-			"rev-parse", "--abbrev-ref", `${branch}@{upstream}`,
-		]);
-		if (upstreamCode === 0 && upstream.trim()) {
-			const { stdout: mergeBase, code } = await pi.exec("git", ["merge-base", "HEAD", upstream.trim()]);
-			if (code === 0 && mergeBase.trim()) return mergeBase.trim();
-		}
-		const { stdout: mergeBase, code } = await pi.exec("git", ["merge-base", "HEAD", branch]);
-		if (code === 0 && mergeBase.trim()) return mergeBase.trim();
-		return null;
-	} catch {
-		return null;
-	}
-}
-
-async function getLocalBranches(pi: ExtensionAPI): Promise<string[]> {
-	const { stdout, code } = await pi.exec("git", ["branch", "--format=%(refname:short)"]);
-	if (code !== 0) return [];
-	return stdout.trim().split("\n").filter((b) => b.trim());
-}
-
-async function getCurrentBranch(pi: ExtensionAPI): Promise<string | null> {
-	const { stdout, code } = await pi.exec("git", ["branch", "--show-current"]);
-	return code === 0 && stdout.trim() ? stdout.trim() : null;
-}
-
-async function getRecentCommits(
-	pi: ExtensionAPI,
-	limit = 15,
-): Promise<Array<{ sha: string; title: string }>> {
-	const { stdout, code } = await pi.exec("git", ["log", "--oneline", `-n`, `${limit}`]);
-	if (code !== 0) return [];
-	return stdout
-		.trim()
-		.split("\n")
-		.filter((l) => l.trim())
-		.map((line) => {
-			const [sha, ...rest] = line.trim().split(" ");
-			return { sha: sha ?? "", title: rest.join(" ") };
-		});
-}
-
 async function buildReviewPrompt(pi: ExtensionAPI, target: ReviewTarget): Promise<string> {
+	const vcs = await detectVCS(pi);
+
+	if (vcs === "jj") {
+		switch (target.type) {
+			case "uncommitted":
+				return "审查当前代码改动。使用 `jj status` 和 `jj diff` 获取改动内容，提供带优先级的 findings。";
+
+			case "baseBranch": {
+				const ref = target.branch;
+				const mergeBaseRevset = `heads(::@ & ::${ref})`;
+				return `审查相对于 '${ref}' 的代码改动。先用 \`jj log -r '${mergeBaseRevset}' --no-graph\` 确认共同祖先，再运行 \`jj diff --from '${mergeBaseRevset}' --to @\` 查看相对于共同祖先的改动，提供带优先级的可操作 findings。`;
+			}
+
+			case "commit": {
+				const short = target.sha.slice(0, 8);
+				if (target.title) {
+					return `审查 change ${short}（"${target.title}"）引入的代码改动。运行 \`jj --ignore-working-copy diff -r ${target.sha}\` 查看改动内容，提供带优先级的可操作 findings。`;
+				}
+				return `审查 change ${short} 引入的代码改动。运行 \`jj --ignore-working-copy diff -r ${target.sha}\` 查看改动内容，提供带优先级的可操作 findings。`;
+			}
+		}
+	}
+
+	// Git path
 	switch (target.type) {
 		case "uncommitted":
 			return "审查当前代码改动（已暂存、未暂存和未追踪的文件）。使用 `git status --porcelain`、`git diff`、`git diff --staged` 获取改动内容，提供带优先级的 findings。";
@@ -249,7 +356,7 @@ async function buildReviewPrompt(pi: ExtensionAPI, target: ReviewTarget): Promis
 	}
 }
 
-function getTargetLabel(target: ReviewTarget): string {
+function getTargetLabel(target: ReviewTarget, vcs: "git" | "jj"): string {
 	switch (target.type) {
 		case "uncommitted":
 			return "当前未提交改动";
@@ -257,7 +364,8 @@ function getTargetLabel(target: ReviewTarget): string {
 			return `相对 '${target.branch}' 的改动`;
 		case "commit": {
 			const short = target.sha.slice(0, 7);
-			return target.title ? `commit ${short}: ${target.title}` : `commit ${short}`;
+			const prefix = vcs === "jj" ? "change" : "commit";
+			return target.title ? `${prefix} ${short}: ${target.title}` : `${prefix} ${short}`;
 		}
 	}
 }
@@ -293,18 +401,18 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 
 		if (trimmed.startsWith("branch ")) {
 			const branch = trimmed.slice(7).trim();
-			if (!branch) { ctx.ui.notify("用法：/review branch <分支名>", "error"); return null; }
+			if (!branch) { ctx.ui.notify("用法：/review branch <分支名/bookmark>", "error"); return null; }
 			return { type: "baseBranch", branch };
 		}
 
 		if (trimmed.startsWith("commit ")) {
 			const sha = trimmed.slice(7).trim();
-			if (!sha) { ctx.ui.notify("用法：/review commit <sha>", "error"); return null; }
+			if (!sha) { ctx.ui.notify("用法：/review commit <rev>", "error"); return null; }
 			return { type: "commit", sha };
 		}
 
 		if (trimmed) {
-			ctx.ui.notify("用法：/review [uncommitted | branch <name> | commit <sha>]", "error");
+			ctx.ui.notify("用法：/review [uncommitted | branch <name> | commit <rev>]", "error");
 			return null;
 		}
 
@@ -319,12 +427,26 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 		if (choice === "当前未提交改动") return { type: "uncommitted" };
 
 		if (choice === "相对某个分支的改动") {
-			const [allBranches, currentBranch] = await Promise.all([
+			const vcs = await detectVCS(pi);
+			if (vcs === "jj") {
+				const [allRefs, currentBookmarks] = await Promise.all([
+					getLocalBranches(pi),
+					jjCurrentBookmarks(pi),
+				]);
+				const excluded = new Set(currentBookmarks);
+				const others = allRefs.filter((b) => !excluded.has(b));
+				if (others.length === 0) { ctx.ui.notify("没有其他可用分支/bookmark", "error"); return null; }
+				const branch = await ctx.ui.select("选择基础分支：", others);
+				if (!branch) return null;
+				return { type: "baseBranch", branch };
+			}
+
+			const [allRefs, currentRef] = await Promise.all([
 				getLocalBranches(pi),
 				getCurrentBranch(pi),
 			]);
-			const others = allBranches.filter((b) => b !== currentBranch);
-			if (others.length === 0) { ctx.ui.notify("没有其他可用分支", "error"); return null; }
+			const others = allRefs.filter((b) => b !== currentRef);
+			if (others.length === 0) { ctx.ui.notify("没有其他可用分支/bookmark", "error"); return null; }
 			const branch = await ctx.ui.select("选择基础分支：", others);
 			if (!branch) return null;
 			return { type: "baseBranch", branch };
@@ -332,9 +454,9 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 
 		if (choice === "某个 commit") {
 			const commits = await getRecentCommits(pi);
-			if (commits.length === 0) { ctx.ui.notify("没有找到 commit 记录", "error"); return null; }
+			if (commits.length === 0) { ctx.ui.notify("没有找到记录", "error"); return null; }
 			const commitChoice = await ctx.ui.select(
-				"选择 commit：",
+				"选择：",
 				commits.map((c) => `${c.sha.slice(0, 7)}  ${c.title}`),
 			);
 			if (!commitChoice) return null;
@@ -349,7 +471,7 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 	// ── Commands ──────────────────────────────────────────────────────────────
 
 	pi.registerCommand("review", {
-		description: "审查代码改动。用法：/review [uncommitted | branch <name> | commit <sha>]",
+		description: "审查代码改动。用法：/review [uncommitted | branch <name> | commit <rev>]",
 		handler: async (args, ctx) => {
 			if (reviewOriginId) {
 				ctx.ui.notify("已有审查进行中。用 /end-review 结束当前审查后再开始新的。", "warning");
@@ -366,9 +488,11 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 			// Persist state so it survives session resume
 			pi.appendEntry(REVIEW_STATE_TYPE, { active: true, originId: reviewOriginId } satisfies ReviewSessionState);
 
+			const vcs = await detectVCS(pi);
+			const label = getTargetLabel(target, vcs);
+
 			setReviewWidget(ctx, true);
 
-			const label = getTargetLabel(target);
 			const prompt = await buildReviewPrompt(pi, target);
 			pi.sendMessage(
 				{
