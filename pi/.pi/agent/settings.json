@@ -1,11 +1,10 @@
 {
-  "lastChangelogVersion": "0.65.2",
+  "lastChangelogVersion": "0.66.1",
   "defaultProvider": "github-copilot",
-  "defaultModel": "gpt-5.4",
-  "defaultThinkingLevel": "medium",
+  "defaultModel": "claude-opus-4.6",
+  "defaultThinkingLevel": "high",
   "packages": [
-    "~/projects/agentry",
-    "git:github.com/badlogic/pi-telegram"
+    "~/projects/agentry"
   ],
   "hideThinkingBlock": false,
   "theme": "dark",

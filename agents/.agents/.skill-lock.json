@@ -56,15 +56,6 @@
       "installedAt": "2026-03-25T17:47:43.301Z",
       "updatedAt": "2026-03-28T15:15:20.650Z"
     },
-    "brainstorming": {
-      "source": "obra/superpowers",
-      "sourceType": "github",
-      "sourceUrl": "https://github.com/obra/superpowers.git",
-      "skillPath": "skills/brainstorming/SKILL.md",
-      "skillFolderHash": "f260c775073816860fef8a37c032ac77e2ff5821",
-      "installedAt": "2026-03-25T17:50:19.505Z",
-      "updatedAt": "2026-03-28T15:15:27.313Z"
-    },
     "find-skills": {
       "source": "vercel-labs/skills",
       "sourceType": "github",
