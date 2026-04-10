@@ -19,7 +19,7 @@
 
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, TextContent } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { TreeSelectorComponent, type ExtensionAPI, type ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Key } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { extractPlan } from "./extract.js";
@@ -28,7 +28,6 @@ import {
 	formatElapsed,
 	getTextContent,
 	isAssistantMessage,
-	looksLikePlan,
 	type PlanStep,
 } from "./utils.js";
 
@@ -133,18 +132,45 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 		}
 	}
 
-	// ── Find last assistant text on branch ─────────────────────────────────
+	// ── Message collection for plan extraction ───────────────────────────────
 
-	function findLastAssistantText(ctx: ExtensionContext): string | null {
+	function collectAssistantTextFrom(ctx: ExtensionContext, startEntryId: string): string | null {
 		const branch = ctx.sessionManager.getBranch();
-		for (let i = branch.length - 1; i >= 0; i--) {
-			const entry = branch[i];
+		let collecting = false;
+		const texts: string[] = [];
+
+		for (const entry of branch) {
+			if (entry.id === startEntryId) collecting = true;
+			if (!collecting) continue;
 			if (entry.type !== "message") continue;
 			const msg = entry.message as AgentMessage;
 			if (!isAssistantMessage(msg)) continue;
-			return getTextContent(msg);
+			const text = getTextContent(msg);
+			if (text.trim()) texts.push(text);
 		}
-		return null;
+		return texts.length > 0 ? texts.join("\n\n---\n\n") : null;
+	}
+
+	async function pickAndCollect(ctx: ExtensionContext): Promise<string | null> {
+		const tree = ctx.sessionManager.getTree();
+		if (tree.length === 0) return null;
+
+		const leafId = ctx.sessionManager.getLeafId();
+		const termHeight = 20;
+
+		const entryId = await ctx.ui.custom<string | null>((tui, _theme, _kb, done) => {
+			const selector = new TreeSelectorComponent(
+				tree,
+				leafId,
+				termHeight,
+				(id) => done(id),
+				() => done(null),
+			);
+			return selector;
+		});
+
+		if (!entryId) return null;
+		return collectAssistantTextFrom(ctx, entryId);
 	}
 
 	// ── mark_done tool (always available) ──────────────────────────────────
@@ -257,7 +283,7 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 	// ── /track command ─────────────────────────────────────────────────────
 
 	pi.registerCommand("track", {
-		description: "Extract and track plan from last assistant message",
+		description: "Pick a starting message, then extract plan from all assistant replies after it",
 		handler: async (_args, ctx) => {
 			if (!ctx.hasUI) {
 				ctx.ui.notify("/track requires interactive mode", "error");
@@ -268,30 +294,34 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 				return;
 			}
 
-			const assistantText = findLastAssistantText(ctx);
+			const assistantText = await pickAndCollect(ctx);
 			if (!assistantText) {
-				ctx.ui.notify("No assistant message found", "error");
+				ctx.ui.notify("Cancelled or no messages found", "info");
 				return;
 			}
 
-			const extracted = await extractPlan(
+			const result = await extractPlan(
 				assistantText,
 				ctx,
 				ctx.ui,
 			);
 
-			if (extracted === null) {
+			if (result.status === "cancelled") {
 				ctx.ui.notify("Cancelled", "info");
 				return;
 			}
-			if (extracted.length === 0) {
-				ctx.ui.notify("No actionable plan found in last message", "info");
+			if (result.status === "error") {
+				ctx.ui.notify(`Plan extraction failed: ${result.error}`, "error");
+				return;
+			}
+			if (result.status === "no_plan" || result.steps.length === 0) {
+				ctx.ui.notify("No actionable plan found in selected messages", "info");
 				return;
 			}
 
 			// Show PlanEditor TUI
 			const editorResult = await ctx.ui.custom<PlanEditorResult>((tui, _theme, _kb, done) => {
-				return new PlanEditorComponent(extracted, done);
+				return new PlanEditorComponent(result.steps, done);
 			});
 
 			if (editorResult.cancelled || editorResult.steps.length === 0) {
@@ -369,33 +399,37 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 	// ── Shortcut: Ctrl+Alt+P → /track ──────────────────────────────────────
 
 	pi.registerShortcut(Key.ctrlAlt("p"), {
-		description: "Extract and track plan from last message",
+		description: "Extract and track plan from recent messages",
 		handler: async (ctx) => {
 			if (!ctx.hasUI || !ctx.model) return;
 
-			const assistantText = findLastAssistantText(ctx);
+			const assistantText = await pickAndCollect(ctx);
 			if (!assistantText) {
-				ctx.ui.notify("No assistant message found", "error");
+				ctx.ui.notify("Cancelled or no messages found", "info");
 				return;
 			}
 
-			const extracted = await extractPlan(
+			const result = await extractPlan(
 				assistantText,
 				ctx,
 				ctx.ui,
 			);
 
-			if (extracted === null) {
+			if (result.status === "cancelled") {
 				ctx.ui.notify("Cancelled", "info");
 				return;
 			}
-			if (extracted.length === 0) {
-				ctx.ui.notify("No actionable plan found in last message", "info");
+			if (result.status === "error") {
+				ctx.ui.notify(`Plan extraction failed: ${result.error}`, "error");
+				return;
+			}
+			if (result.status === "no_plan" || result.steps.length === 0) {
+				ctx.ui.notify("No actionable plan found in selected messages", "info");
 				return;
 			}
 
 			const editorResult = await ctx.ui.custom<PlanEditorResult>((tui, _theme, _kb, done) => {
-				return new PlanEditorComponent(extracted, done);
+				return new PlanEditorComponent(result.steps, done);
 			});
 
 			if (editorResult.cancelled || editorResult.steps.length === 0) {
@@ -431,33 +465,6 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 				display: false,
 			},
 		};
-	});
-
-	// ── Auto-detection on agent_end ────────────────────────────────────────
-
-	pi.on("agent_end", async (event, ctx) => {
-		// Skip if there's already an active plan
-		if (steps.length > 0) return;
-		if (!ctx.hasUI || !ctx.model) return;
-
-		// Find the last assistant message
-		const lastAssistant = [...event.messages].reverse().find(isAssistantMessage);
-		if (!lastAssistant) return;
-		const text = getTextContent(lastAssistant as AssistantMessage);
-
-		// Pre-filter: cheap regex check
-		if (!looksLikePlan(text)) return;
-
-		// Extract via small model
-		const extracted = await extractPlan(
-			text,
-			ctx,
-			ctx.ui,
-		);
-
-		if (!extracted || extracted.length === 0) return;
-
-		await offerTracking(extracted, ctx);
 	});
 
 	// ── Filter stale context messages ──────────────────────────────────────
