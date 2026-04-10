@@ -23,6 +23,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import { getModelForSlot } from "../../lib/model-router.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
@@ -39,6 +40,8 @@ async function detectVCS(pi: ExtensionAPI): Promise<"git" | "jj"> {
 
 /** Entry ID before review started — used by /end-review to navigate back. */
 let reviewOriginId: string | undefined = undefined;
+/** Model that was active before review started — restored on /end-review. */
+let preReviewModelRef: string | undefined = undefined;
 
 const REVIEW_STATE_TYPE = "review-session";
 
@@ -493,6 +496,13 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 
 			setReviewWidget(ctx, true);
 
+			// Switch to cross-model for review
+			const reviewModel = await getModelForSlot("review", ctx);
+			if (reviewModel && ctx.model && reviewModel.id !== ctx.model.id) {
+				preReviewModelRef = `${ctx.model.provider}/${ctx.model.id}`;
+				await pi.setModel(reviewModel);
+			}
+
 			const prompt = await buildReviewPrompt(pi, target);
 			pi.sendMessage(
 				{
@@ -516,6 +526,15 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 			reviewOriginId = undefined;
 			pi.appendEntry(REVIEW_STATE_TYPE, { active: false } satisfies ReviewSessionState);
 			setReviewWidget(ctx, false);
+
+			// Restore the model that was active before review
+			if (preReviewModelRef) {
+				const [provider, modelId] = preReviewModelRef.split("/");
+				const original = ctx.modelRegistry.find(provider, modelId);
+				if (original) await pi.setModel(original);
+				preReviewModelRef = undefined;
+			}
+
 			await ctx.navigateTree(originId);
 		},
 	});

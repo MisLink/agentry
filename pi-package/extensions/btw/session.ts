@@ -23,7 +23,7 @@ import {
 	type ExtensionContext,
 	type ResourceLoader,
 } from "@mariozechner/pi-coding-agent";
-import { complete, type UserMessage, type AssistantMessage, type Message } from "@mariozechner/pi-ai";
+import { complete, type UserMessage, type AssistantMessage, type Message, type Model, type Api } from "@mariozechner/pi-ai";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { BtwThread } from "./thread.js";
 
@@ -167,13 +167,14 @@ type ActiveSession = {
 export class SideSessionManager {
 	private active: ActiveSession | null = null;
 
-	private keyFor(ctx: ExtensionContext): string {
-		return ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "none";
+	private keyFor(model: Model<Api>): string {
+		return `${model.provider}/${model.id}`;
 	}
 
 	/**
 	 * Return the active session, creating or recreating it as needed.
 	 * Seeds with main context messages plus prior BTW items.
+	 * @param overrideModel — if provided, use this model instead of ctx.model
 	 */
 	async ensure(
 		ctx: ExtensionContext,
@@ -181,17 +182,19 @@ export class SideSessionManager {
 		thinkingLevel: ThinkingLevel,
 		onEvent: (event: AgentSessionEvent) => void,
 		onWarn: (msg: string) => void,
+		overrideModel?: Model<Api>,
 	): Promise<AgentSession | null> {
-		if (!ctx.model) return null;
+		const model = overrideModel ?? ctx.model;
+		if (!model) return null;
 
-		const expectedKey = this.keyFor(ctx);
+		const expectedKey = this.keyFor(model);
 		if (this.active?.modelKey === expectedKey) return this.active.session;
 
 		await this.dispose();
 
 		const { session } = await createAgentSession({
 			sessionManager: SessionManager.inMemory(),
-			model: ctx.model,
+			model,
 			modelRegistry: ctx.modelRegistry as AgentSession["modelRegistry"],
 			thinkingLevel,
 			tools: codingTools,

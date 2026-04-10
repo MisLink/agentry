@@ -1,13 +1,13 @@
 /**
  * LLM-based plan extraction.
  *
- * Uses a small model (codex-mini → haiku → current) to extract structured
- * plan steps from assistant messages.  Inspired by mitsuhiko's answer.ts
- * "prompt generator" pattern.
+ * Uses the model-router "utility" slot to select a fast model for extraction.
+ * Falls back to the current session model if no override or fast model is available.
  */
 
 import { complete, type Model, type Api, type UserMessage } from "@mariozechner/pi-ai";
-import { BorderedLoader, type ModelRegistry } from "@mariozechner/pi-coding-agent";
+import { BorderedLoader, type ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { getModelForSlot } from "../../lib/model-router.js";
 import type { PlanStep } from "./utils.js";
 import { truncateText } from "./utils.js";
 
@@ -33,23 +33,9 @@ Rules:
 
 // ── Model selection ────────────────────────────────────────────────────────
 
-const CODEX_MODEL_ID = "gpt-5.1-codex-mini";
-const HAIKU_MODEL_ID = "claude-haiku-4-5";
-
-async function selectExtractionModel(
-	currentModel: Model<Api>,
-	modelRegistry: ModelRegistry,
-): Promise<Model<Api>> {
-	for (const [provider, modelId] of [
-		["openai-codex", CODEX_MODEL_ID],
-		["anthropic", HAIKU_MODEL_ID],
-	] as const) {
-		const model = modelRegistry.find(provider, modelId);
-		if (!model) continue;
-		const auth = await modelRegistry.getApiKeyAndHeaders(model);
-		if (auth.ok) return model;
-	}
-	return currentModel;
+async function selectExtractionModel(ctx: ExtensionContext): Promise<Model<Api>> {
+	const routed = await getModelForSlot("utility", ctx);
+	return routed ?? ctx.model!;
 }
 
 // ── Extraction result parsing ──────────────────────────────────────────────
@@ -76,23 +62,18 @@ function parseResult(text: string): RawExtractionResult | null {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
-export interface ExtractionContext {
-	currentModel: Model<Api>;
-	modelRegistry: ModelRegistry;
-}
-
 /**
  * Extract plan steps from assistant text using a small model.
  * Returns null if cancelled, empty array if no plan detected.
  */
 export async function extractPlan(
 	assistantText: string,
-	ctx: ExtractionContext,
+	ctx: ExtensionContext,
 	ui: {
 		custom: <T>(factory: (tui: any, theme: any, kb: any, done: (v: T) => void) => any, options?: any) => Promise<T>;
 	},
 ): Promise<PlanStep[] | null> {
-	const model = await selectExtractionModel(ctx.currentModel, ctx.modelRegistry);
+	const model = await selectExtractionModel(ctx);
 	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
 	if (!auth.ok) return null;
 

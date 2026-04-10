@@ -33,6 +33,7 @@ import {
 	type ExtensionContext,
 	type Theme,
 } from "@mariozechner/pi-coding-agent";
+import { getModelForSlot } from "../../lib/model-router.js";
 import { Key, Markdown, truncateToWidth, type OverlayHandle } from "@mariozechner/pi-tui";
 import {
 	BtwThread,
@@ -420,12 +421,14 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		const btwModel = await getModelForSlot("btw", ctx);
 		const session = await sideSession.ensure(
 			ctx,
 			thread,
 			pi.getThinkingLevel() as "off" | "minimal" | "low" | "medium" | "high" | "xhigh",
 			handleSideEvent,
 			(msg) => notify(ctx, msg, "warning"),
+			btwModel ?? undefined,
 		);
 		if (!session) {
 			notify(ctx, "BTW: could not create side session.", "error");

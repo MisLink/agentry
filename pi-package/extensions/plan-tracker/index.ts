@@ -276,7 +276,7 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 
 			const extracted = await extractPlan(
 				assistantText,
-				{ currentModel: ctx.model, modelRegistry: ctx.modelRegistry },
+				ctx,
 				ctx.ui,
 			);
 
@@ -381,7 +381,7 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 
 			const extracted = await extractPlan(
 				assistantText,
-				{ currentModel: ctx.model, modelRegistry: ctx.modelRegistry },
+				ctx,
 				ctx.ui,
 			);
 
@@ -451,7 +451,7 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 		// Extract via small model
 		const extracted = await extractPlan(
 			text,
-			{ currentModel: ctx.model, modelRegistry: ctx.modelRegistry },
+			ctx,
 			ctx.ui,
 		);
 
