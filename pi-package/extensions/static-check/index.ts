@@ -49,10 +49,13 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
         args,
         { cwd, timeout: timeoutMs, encoding: "utf8" },
         (err, stdout, stderr) => {
+          const code = err
+            ? (typeof err.code === "number" ? err.code : 1)
+            : 0;
           resolve({
             stdout: (stdout as string) ?? "",
             stderr: (stderr as string) ?? "",
-            code: err ? (err.code as number) ?? 1 : 0,
+            code,
           });
         },
       );

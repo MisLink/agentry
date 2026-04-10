@@ -90,17 +90,6 @@ export function formatCheckResult(
   return { statusText, widgetLines, llmMessage };
 }
 
-/**
- * Build the "all clear" display when a checker produces no new errors.
- */
-export function formatAllClear(checkerName: string, theme: Theme): FormatResult {
-  return {
-    statusText: `✓ ${checkerName}: clean`,
-    widgetLines: [theme.fg("success", `  ✓ ${checkerName}: no new errors`)],
-    llmMessage: "", // Not used — all-clear doesn't trigger LLM
-  };
-}
-
 // ── Internal ───────────────────────────────────────────────────────────────
 
 function buildLlmMessage(

@@ -35,7 +35,7 @@ async function isExecutable(filePath: string): Promise<boolean> {
 function probeCommand(cmd: string, args: string[]): Promise<boolean> {
   return new Promise((resolve) => {
     const child = execFile(cmd, args, { timeout: 3_000 }, (err) => {
-      resolve(!err || err.code === 0);
+      resolve(!err);
     });
     child.on("error", () => resolve(false));
   });

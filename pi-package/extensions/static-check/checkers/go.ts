@@ -46,25 +46,18 @@ interface GolangciOutput {
 	Issues?: GolangciIssue[];
 }
 
+/**
+ * Parse golangci-lint JSON output.
+ * With --output.json.path=stdout --output.text.path=, stdout should be
+ * a single JSON object. We try JSON.parse directly — no manual brace matching.
+ */
 function parseGolangciJson(stdout: string, projectRoot: string): Diagnostic[] {
-	const jsonStart = stdout.indexOf("{");
-	if (jsonStart === -1) return [];
-
-	// Find matching closing brace (the Report object can be huge)
-	let depth = 0;
-	let jsonEnd = jsonStart;
-	for (let i = jsonStart; i < stdout.length; i++) {
-		if (stdout[i] === "{") depth++;
-		else if (stdout[i] === "}") depth--;
-		if (depth === 0) {
-			jsonEnd = i + 1;
-			break;
-		}
-	}
+	const trimmed = stdout.trim();
+	if (!trimmed) return [];
 
 	let data: GolangciOutput;
 	try {
-		data = JSON.parse(stdout.slice(jsonStart, jsonEnd));
+		data = JSON.parse(trimmed);
 	} catch {
 		return [];
 	}
@@ -97,40 +90,50 @@ interface GoVetDiagnostic {
 }
 
 /**
- * go vet -json outputs:
- * { "pkg/path": { "analyzerName": [ { "posn": "file.go:10:5", "message": "..." } ] } }
+ * go vet -json outputs NDJSON — one JSON object per package:
+ *   {"pkg1":{"analyzerName":[{"posn":"file.go:10:5","message":"..."}]}}
+ *   {"pkg2":{"analyzerName":[...]}}
+ *
+ * We parse each line independently and merge results.
  */
 function parseGoVetJson(stdout: string, projectRoot: string): Diagnostic[] {
-	let data: Record<string, Record<string, GoVetDiagnostic[]>>;
-	try {
-		data = JSON.parse(stdout);
-	} catch {
-		return [];
-	}
-
 	const diagnostics: Diagnostic[] = [];
 
-	for (const pkgAnalyzers of Object.values(data)) {
-		for (const issues of Object.values(pkgAnalyzers)) {
-			if (!Array.isArray(issues)) continue;
-			for (const issue of issues) {
-				// posn format: "/abs/path/file.go:10:5" or "file.go:10:5"
-				const match = issue.posn.match(/^(.+?):(\d+):(\d+)$/);
-				if (!match) continue;
+	for (const line of stdout.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed || !trimmed.startsWith("{")) continue;
 
-				const [, rawFile, line, col] = match;
-				const file = isAbsolute(rawFile)
-					? relative(projectRoot, rawFile)
-					: rawFile;
+		let data: Record<string, Record<string, GoVetDiagnostic[]>>;
+		try {
+			data = JSON.parse(trimmed);
+		} catch {
+			continue;
+		}
 
-				diagnostics.push(
-					makeDiagnostic(
-						file.replace(/\\/g, "/"),
-						parseInt(line, 10),
-						parseInt(col, 10),
-						issue.message,
-					),
-				);
+		for (const pkgAnalyzers of Object.values(data)) {
+			if (typeof pkgAnalyzers !== "object" || pkgAnalyzers === null) continue;
+			for (const issues of Object.values(pkgAnalyzers)) {
+				if (!Array.isArray(issues)) continue;
+				for (const issue of issues) {
+					if (!issue.posn || !issue.message) continue;
+					// posn format: "/abs/path/file.go:10:5" or "file.go:10:5"
+					const match = issue.posn.match(/^(.+?):(\d+):(\d+)$/);
+					if (!match) continue;
+
+					const [, rawFile, lineStr, colStr] = match;
+					const file = isAbsolute(rawFile)
+						? relative(projectRoot, rawFile)
+						: rawFile;
+
+					diagnostics.push(
+						makeDiagnostic(
+							file.replace(/\\/g, "/"),
+							parseInt(lineStr, 10),
+							parseInt(colStr, 10),
+							issue.message,
+						),
+					);
+				}
 			}
 		}
 	}
@@ -176,20 +179,19 @@ export const goChecker: LanguageChecker = {
 	parseOutput(stdout, stderr, exitCode, projectRoot) {
 		if (exitCode === 0) return [];
 
-		const output = [stdout, stderr].filter(Boolean).join("\n");
-
-		// Detect which tool produced the output
-		if (output.includes('"FromLinter"') || output.includes('"Issues"')) {
-			return parseGolangciJson(output, projectRoot);
+		// golangci-lint: detect by stdout content (JSON goes to stdout only)
+		if (stdout.includes('"FromLinter"') || stdout.includes('"Issues"')) {
+			return parseGolangciJson(stdout, projectRoot);
 		}
 
-		// go vet -json: top-level keys are package paths
-		if (output.trimStart().startsWith("{")) {
-			const parsed = parseGoVetJson(output, projectRoot);
+		// go vet -json: NDJSON on stdout, parse line by line
+		if (stdout.trim()) {
+			const parsed = parseGoVetJson(stdout, projectRoot);
 			if (parsed.length > 0) return parsed;
 		}
 
-		// Fallback: line-based parsing for unexpected formats
+		// Fallback: line-based regex on both stdout and stderr
+		const output = [stdout, stderr].filter(Boolean).join("\n");
 		const diagnostics: Diagnostic[] = [];
 		const re = /^(?:\.\/)?(.+?):(\d+):(\d+):\s+(.+)$/gm;
 		let m: RegExpExecArray | null;

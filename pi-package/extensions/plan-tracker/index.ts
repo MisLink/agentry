@@ -2,34 +2,25 @@
  * Plan Tracker Extension
  *
  * Non-modal plan tracking that integrates naturally into conversations.
- * Detects plans from assistant messages, tracks execution progress,
- * and provides a work log on completion.
+ * The AI creates plans via the `create_plan` tool, the user tracks progress
+ * via widget + mark_done.
  *
  * Features:
- * - Auto-detection: regex pre-filter → small-model extraction
- * - /plan <msg>: request a plan from the AI (no mode switch)
- * - /track: manually extract plan from last message via LLM + TUI editor
+ * - create_plan tool: AI outputs structured plan steps directly (zero extra cost)
+ * - mark_done tool: AI reports step completion with optional summary
+ * - /plan <msg>: request a plan from the AI
+ * - /track: manually create/edit a plan via PlanEditor TUI
  * - /todos: view current plan progress
  * - /done N: manually mark a step as complete
- * - mark_done tool: AI reports step completion with optional summary
  * - Ctrl+Alt+P: shortcut for /track
  * - Progress widget + footer status
  * - Work log on plan completion
  */
 
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, TextContent } from "@mariozechner/pi-ai";
-import { TreeSelectorComponent, type ExtensionAPI, type ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Key } from "@mariozechner/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { extractPlan } from "./extract.js";
-import { PlanEditorComponent, type PlanEditorResult } from "./plan-editor.js";
-import {
-	formatElapsed,
-	getTextContent,
-	isAssistantMessage,
-	type PlanStep,
-} from "./utils.js";
+import { formatElapsed, type PlanStep } from "./utils.js";
 
 export default function planTrackerExtension(pi: ExtensionAPI): void {
 	let steps: PlanStep[] = [];
@@ -57,11 +48,8 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 		}
 
 		const done = steps.filter((s) => s.completed).length;
-
-		// Footer status
 		ctx.ui.setStatus("plan-tracker", ctx.ui.theme.fg("accent", `📋 ${done}/${steps.length}`));
 
-		// Widget
 		const lines = steps.map((item) => {
 			if (item.completed) {
 				const check = ctx.ui.theme.fg("success", "☑ ");
@@ -74,7 +62,7 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 		ctx.ui.setWidget("plan-tracker", lines);
 	}
 
-	// ── Activate plan ──────────────────────────────────────────────────────
+	// ── Plan lifecycle ─────────────────────────────────────────────────────
 
 	function activatePlan(newSteps: PlanStep[], pause: boolean, ctx: ExtensionContext): void {
 		steps = newSteps;
@@ -94,8 +82,6 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 		persist();
 	}
 
-	// ── Build work log ─────────────────────────────────────────────────────
-
 	function buildWorkLog(): string {
 		const elapsed = formatElapsed(Date.now() - planStartedAt);
 		const header = `📋 Plan Complete (${steps.length}/${steps.length}) — ${elapsed}`;
@@ -106,18 +92,21 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 		return `**${header}**\n\n${lines.join("\n")}`;
 	}
 
-	// ── Offer tracking after extraction ────────────────────────────────────
+	// ── Offer tracking mode selection ──────────────────────────────────────
 
-	async function offerTracking(extracted: PlanStep[], ctx: ExtensionContext): Promise<void> {
+	type TrackingChoice = "execute" | "track-only" | "refine" | "ignore";
+
+	async function offerTracking(planSteps: PlanStep[], ctx: ExtensionContext): Promise<TrackingChoice> {
 		const choice = await ctx.ui.select(
-			`检测到计划（${extracted.length} 步），如何执行？`,
-			["逐步执行（每步暂停确认）", "一次性运行全部", "只追踪（手动 /done）", "忽略"],
+			`计划（${planSteps.length} 步），如何执行？`,
+			["逐步执行（每步暂停确认）", "一次性运行全部", "只追踪（手动 /done）", "继续完善", "忽略"],
 		);
-		if (!choice || choice === "忽略") return;
+		if (!choice || choice === "忽略") return "ignore";
+		if (choice === "继续完善") return "refine";
 
 		const pause = choice.startsWith("逐步");
 		const trackOnly = choice.startsWith("只追踪");
-		activatePlan(extracted, pause, ctx);
+		activatePlan(planSteps, pause, ctx);
 
 		if (!trackOnly) {
 			const first = steps[0];
@@ -129,51 +118,69 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 				},
 				{ triggerTurn: true },
 			);
+			return "execute";
 		}
+		return "track-only";
 	}
 
-	// ── Message collection for plan extraction ───────────────────────────────
+	// ── create_plan tool ───────────────────────────────────────────────────
 
-	function collectAssistantTextFrom(ctx: ExtensionContext, startEntryId: string): string | null {
-		const branch = ctx.sessionManager.getBranch();
-		let collecting = false;
-		const texts: string[] = [];
+	pi.registerTool({
+		name: "create_plan",
+		label: "Create Plan",
+		description:
+			"Create a tracked execution plan. The plan appears as a progress widget " +
+			"and enables mark_done for step-by-step tracking. Call this when you've " +
+			"analyzed a task and are ready to propose a concrete sequence of steps.",
+		promptSnippet: "create_plan({ steps }) - create a tracked execution plan with numbered steps",
+		promptGuidelines: [
+			"When you formulate a multi-step plan for a task, call create_plan to register it for tracking instead of just describing the steps in text.",
+			"Each step should have a short 'text' (≤60 chars, for the progress widget) and a detailed 'detail' (full description for execution context).",
+			"Only call create_plan when you have a concrete plan ready to execute. Do not call it for brainstorming or listing options.",
+		],
+		parameters: Type.Object({
+			steps: Type.Array(
+				Type.Object({
+					text: Type.String({ description: "Short step summary (≤60 chars) for the progress widget" }),
+					detail: Type.String({ description: "Full step description with enough context to execute" }),
+				}),
+				{ description: "Ordered list of plan steps", minItems: 1 },
+			),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const planSteps: PlanStep[] = params.steps.map((s, i) => ({
+				step: i + 1,
+				text: s.text.slice(0, 60),
+				detail: s.detail,
+				completed: false,
+			}));
 
-		for (const entry of branch) {
-			if (entry.id === startEntryId) collecting = true;
-			if (!collecting) continue;
-			if (entry.type !== "message") continue;
-			const msg = entry.message as AgentMessage;
-			if (!isAssistantMessage(msg)) continue;
-			const text = getTextContent(msg);
-			if (text.trim()) texts.push(text);
-		}
-		return texts.length > 0 ? texts.join("\n\n---\n\n") : null;
-	}
+			const choice = await offerTracking(planSteps, ctx);
 
-	async function pickAndCollect(ctx: ExtensionContext): Promise<string | null> {
-		const tree = ctx.sessionManager.getTree();
-		if (tree.length === 0) return null;
+			if (choice === "refine") {
+				const list = planSteps.map((s) => `${s.step}. ${s.text} — ${s.detail}`).join("\n");
+				return {
+					content: [{ type: "text", text: `User wants to refine the plan before starting. Current draft:\n${list}\n\nAsk the user what they'd like to change, then call create_plan again with the revised steps.` }],
+					details: { success: false, reason: "refine" },
+				};
+			}
 
-		const leafId = ctx.sessionManager.getLeafId();
-		const termHeight = 20;
+			if (steps.length > 0) {
+				const list = steps.map((s) => `${s.step}. ${s.text}`).join("\n");
+				return {
+					content: [{ type: "text", text: `Plan created (${steps.length} steps):\n${list}` }],
+					details: { success: true, stepCount: steps.length },
+				};
+			}
 
-		const entryId = await ctx.ui.custom<string | null>((tui, _theme, _kb, done) => {
-			const selector = new TreeSelectorComponent(
-				tree,
-				leafId,
-				termHeight,
-				(id) => done(id),
-				() => done(null),
-			);
-			return selector;
-		});
+			return {
+				content: [{ type: "text", text: "Plan was not activated (user chose to ignore)." }],
+				details: { success: false },
+			};
+		},
+	});
 
-		if (!entryId) return null;
-		return collectAssistantTextFrom(ctx, entryId);
-	}
-
-	// ── mark_done tool (always available) ──────────────────────────────────
+	// ── mark_done tool ─────────────────────────────────────────────────────
 
 	pi.registerTool({
 		name: "mark_done",
@@ -219,7 +226,6 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 				? `✓ Step ${params.step} complete: ${params.summary}`
 				: `✓ Step ${params.step} marked complete.`;
 
-			// Check for plan completion
 			if (steps.every((s) => s.completed)) {
 				const log = buildWorkLog();
 				pi.sendMessage(
@@ -233,7 +239,6 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 				};
 			}
 
-			// Pause for confirmation if step-by-step
 			const remaining = steps.filter((s) => !s.completed);
 			if (remaining.length > 0 && !skipConfirmations && pauseOnStep) {
 				const nextStep = remaining[0];
@@ -276,60 +281,7 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 				ctx.ui.notify("Usage: /plan <message>  — e.g. /plan 重构登录模块", "info");
 				return;
 			}
-			pi.sendUserMessage(`请分析以下任务并制定详细的编号执行计划：\n\n${message}`);
-		},
-	});
-
-	// ── /track command ─────────────────────────────────────────────────────
-
-	pi.registerCommand("track", {
-		description: "Pick a starting message, then extract plan from all assistant replies after it",
-		handler: async (_args, ctx) => {
-			if (!ctx.hasUI) {
-				ctx.ui.notify("/track requires interactive mode", "error");
-				return;
-			}
-			if (!ctx.model) {
-				ctx.ui.notify("No model selected", "error");
-				return;
-			}
-
-			const assistantText = await pickAndCollect(ctx);
-			if (!assistantText) {
-				ctx.ui.notify("Cancelled or no messages found", "info");
-				return;
-			}
-
-			const result = await extractPlan(
-				assistantText,
-				ctx,
-				ctx.ui,
-			);
-
-			if (result.status === "cancelled") {
-				ctx.ui.notify("Cancelled", "info");
-				return;
-			}
-			if (result.status === "error") {
-				ctx.ui.notify(`Plan extraction failed: ${result.error}`, "error");
-				return;
-			}
-			if (result.status === "no_plan" || result.steps.length === 0) {
-				ctx.ui.notify("No actionable plan found in selected messages", "info");
-				return;
-			}
-
-			// Show PlanEditor TUI
-			const editorResult = await ctx.ui.custom<PlanEditorResult>((tui, _theme, _kb, done) => {
-				return new PlanEditorComponent(result.steps, done);
-			});
-
-			if (editorResult.cancelled || editorResult.steps.length === 0) {
-				ctx.ui.notify("Cancelled", "info");
-				return;
-			}
-
-			await offerTracking(editorResult.steps, ctx);
+			pi.sendUserMessage(`请分析以下任务并制定执行计划，使用 create_plan 工具输出：\n\n${message}`);
 		},
 	});
 
@@ -339,7 +291,7 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 		description: "Show current plan progress",
 		handler: async (_args, ctx) => {
 			if (steps.length === 0) {
-				ctx.ui.notify("No active plan. Use /plan <msg> to request one, or /track to extract from last message.", "info");
+				ctx.ui.notify("No active plan. Ask the AI to create one, or use /track to create manually.", "info");
 				return;
 			}
 			const done = steps.filter((s) => s.completed).length;
@@ -384,7 +336,6 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 			persist();
 			ctx.ui.notify(`✓ Step ${n} marked complete.`, "info");
 
-			// Check for plan completion
 			if (steps.every((s) => s.completed)) {
 				const log = buildWorkLog();
 				pi.sendMessage(
@@ -393,51 +344,6 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 				);
 				clearPlan(ctx);
 			}
-		},
-	});
-
-	// ── Shortcut: Ctrl+Alt+P → /track ──────────────────────────────────────
-
-	pi.registerShortcut(Key.ctrlAlt("p"), {
-		description: "Extract and track plan from recent messages",
-		handler: async (ctx) => {
-			if (!ctx.hasUI || !ctx.model) return;
-
-			const assistantText = await pickAndCollect(ctx);
-			if (!assistantText) {
-				ctx.ui.notify("Cancelled or no messages found", "info");
-				return;
-			}
-
-			const result = await extractPlan(
-				assistantText,
-				ctx,
-				ctx.ui,
-			);
-
-			if (result.status === "cancelled") {
-				ctx.ui.notify("Cancelled", "info");
-				return;
-			}
-			if (result.status === "error") {
-				ctx.ui.notify(`Plan extraction failed: ${result.error}`, "error");
-				return;
-			}
-			if (result.status === "no_plan" || result.steps.length === 0) {
-				ctx.ui.notify("No actionable plan found in selected messages", "info");
-				return;
-			}
-
-			const editorResult = await ctx.ui.custom<PlanEditorResult>((tui, _theme, _kb, done) => {
-				return new PlanEditorComponent(result.steps, done);
-			});
-
-			if (editorResult.cancelled || editorResult.steps.length === 0) {
-				ctx.ui.notify("Cancelled", "info");
-				return;
-			}
-
-			await offerTracking(editorResult.steps, ctx);
 		},
 	});
 
@@ -484,7 +390,6 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 	pi.on("session_start", async (_event, ctx) => {
 		const entries = ctx.sessionManager.getEntries();
 
-		// Find the last plan-tracker state entry
 		const stateEntry = entries
 			.filter((e: { type: string; customType?: string }) => e.type === "custom" && e.customType === "plan-tracker")
 			.pop() as { data?: { steps?: PlanStep[]; startedAt?: number } } | undefined;
@@ -492,7 +397,6 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 		if (stateEntry?.data?.steps && stateEntry.data.steps.length > 0) {
 			steps = stateEntry.data.steps;
 			planStartedAt = stateEntry.data.startedAt ?? Date.now();
-			// Always start fresh — user re-chooses execution mode
 			pauseOnStep = false;
 			skipConfirmations = false;
 		}
