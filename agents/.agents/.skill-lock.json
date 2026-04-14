@@ -156,6 +156,33 @@
       "skillFolderHash": "a45a2cf6381af0007a8d88d3b95f798565ffc5a5",
       "installedAt": "2026-04-07T12:55:18.151Z",
       "updatedAt": "2026-04-07T12:55:18.151Z"
+    },
+    "feishu-create-doc": {
+      "source": "larksuite/openclaw-lark",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/larksuite/openclaw-lark.git",
+      "skillPath": "skills/feishu-create-doc/SKILL.md",
+      "skillFolderHash": "353d485f21d7513de9976668747550e5a62afe6f",
+      "installedAt": "2026-04-14T04:05:09.732Z",
+      "updatedAt": "2026-04-14T04:05:09.732Z"
+    },
+    "feishu-fetch-doc": {
+      "source": "larksuite/openclaw-lark",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/larksuite/openclaw-lark.git",
+      "skillPath": "skills/feishu-fetch-doc/SKILL.md",
+      "skillFolderHash": "a4d007ea00059ba4757e83d0543112c8f24be083",
+      "installedAt": "2026-04-14T04:05:10.256Z",
+      "updatedAt": "2026-04-14T04:05:10.256Z"
+    },
+    "feishu-update-doc": {
+      "source": "larksuite/openclaw-lark",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/larksuite/openclaw-lark.git",
+      "skillPath": "skills/feishu-update-doc/SKILL.md",
+      "skillFolderHash": "16eca0a12aefb6d5c96de3a688743882087e9986",
+      "installedAt": "2026-04-14T04:05:10.783Z",
+      "updatedAt": "2026-04-14T04:05:10.783Z"
     }
   },
   "dismissed": {

@@ -4,7 +4,8 @@
   "defaultModel": "claude-opus-4.6",
   "defaultThinkingLevel": "high",
   "packages": [
-    "~/projects/agentry"
+    "~/projects/agentry",
+    "git:github.com/nicobailon/pi-mcp-adapter@v2.4.0"
   ],
   "hideThinkingBlock": false,
   "theme": "dark",
