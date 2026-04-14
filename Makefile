@@ -13,6 +13,6 @@ enc_files := pi/.pi/agent/models.enc.json pi/.pi/agent/telegram.enc.json pi/.pi/
 decrypted_files := $(patsubst %.enc.json,%.json,$(enc_files))
 
 $(decrypted_files): %.json: %.enc.json
-	sops decrypt $< > $@
+	sops decrypt --output $@ $<
 
 decrypt: $(decrypted_files)
