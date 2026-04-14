@@ -97,17 +97,28 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 
 	type TrackingChoice = "execute" | "track-only" | "refine" | "ignore";
 
+	/** User feedback collected during the input phase, available after offerTracking returns "refine". */
+	let lastRefineFeedback = "";
+
 	async function offerTracking(planSteps: PlanStep[], isRefine: boolean, ctx: ExtensionContext): Promise<TrackingChoice> {
 		const planList = planSteps.map((s) => `  ${s.step}. ${s.text}`).join("\n");
-		const prompt = isRefine
-			? `修改后的计划（${planSteps.length} 步）：\n${planList}\n\n确认执行？`
-			: `计划（${planSteps.length} 步）：\n${planList}\n\n如何执行？`;
+
+		// Step 1: Show input field for optional feedback
+		const inputPrompt = isRefine
+			? `修改后的计划（${planSteps.length} 步）：\n${planList}\n\n还要补充什么？（直接回车跳过）`
+			: `计划（${planSteps.length} 步）：\n${planList}\n\n要补充什么？（直接回车跳过）`;
+		const feedback = await ctx.ui.input(inputPrompt);
+		if (feedback?.trim()) {
+			lastRefineFeedback = feedback.trim();
+			return "refine";
+		}
+
+		// Step 2: No feedback — pick execution mode
 		const options = isRefine
-			? ["逐步执行（每步暂停确认）", "一次性运行全部", "继续完善", "忽略"]
-			: ["逐步执行（每步暂停确认）", "一次性运行全部", "只追踪（手动 /done）", "继续完善", "忽略"];
-		const choice = await ctx.ui.select(prompt, options);
+			? ["逐步执行（每步暂停确认）", "一次性运行全部", "忽略"]
+			: ["逐步执行（每步暂停确认）", "一次性运行全部", "只追踪（手动 /done）", "忽略"];
+		const choice = await ctx.ui.select("如何执行？", options);
 		if (!choice || choice === "忽略") return "ignore";
-		if (choice === "继续完善") return "refine";
 
 		const pause = choice.startsWith("逐步");
 		const trackOnly = choice.startsWith("只追踪");
@@ -167,8 +178,10 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 			if (choice === "refine") {
 				pendingRefine = true;
 				const list = planSteps.map((s) => `${s.step}. ${s.text} — ${s.detail}`).join("\n");
+				const feedback = lastRefineFeedback;
+				lastRefineFeedback = "";
 				return {
-					content: [{ type: "text", text: `User wants to refine the plan before starting. Current draft:\n${list}\n\nAsk the user what they'd like to change, then call create_plan again with the revised steps.` }],
+					content: [{ type: "text", text: `User wants to refine the plan before starting. Current draft:\n${list}\n\nUser feedback: ${feedback}\n\nRevise the plan based on this feedback, then call create_plan again with the revised steps.` }],
 					details: { success: false, reason: "refine" },
 				};
 			}

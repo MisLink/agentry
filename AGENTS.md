@@ -36,10 +36,11 @@ agentry/
 | **review** | `/review` | Fork session 进行代码审查，支持 P0-P3 rubric |
 | **static-check** | `/typecheck` | 编辑文件后自动运行类型检查，可自动修复 |
 | **files** | `/files`、`/diff` | 交互式文件浏览器（模糊搜索 + open/reveal/diff） |
-| **web-search** | `web_fetch` tool | 让 LLM 抓取 URL / DuckDuckGo 搜索 |
+| **web-search** | `web_fetch` tool | 让 LLM 抓取 URL / DuckDuckGo 搜索（二进制内容自动 fallback 到 markitdown） |
 | **notify** | 自动 | agent 完成工作后发送通知（OSC 777/99 或终端 bell）|
 | **questionnaire** | `questionnaire` tool | 单题/多题交互式问卷（单选/多选/自定义输入） |
 | **rtk** | `/rtk` | 通过 rtk 代理压缩 token，节省费用 |
+| **markitdown** | skill（自动触发） | 将 PDF/DOCX/PPTX/XLSX 等文档转为 Markdown（via `uv tool run markitdown`） |
 
 ## 开发约束
 

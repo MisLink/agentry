@@ -53,7 +53,8 @@ function formatAnswerLine(q: Question, a: Answer): string {
 		return `${q.label}: user wrote: ${a.label}`;
 	}
 	const indices = a.indices?.join(", ") ?? "";
-	return `${q.label}: user selected: ${indices}. ${a.label}`;
+	const supplement = a.supplement ? ` (+ ${a.supplement})` : "";
+	return `${q.label}: user selected: ${indices}. ${a.label}${supplement}`;
 }
 
 // ── Extension ──────────────────────────────────────────────────────────────
@@ -137,7 +138,8 @@ export default function questionnaire(pi: ExtensionAPI) {
 			const lines = details.answers.map((a) => {
 				const prefix = a.wasCustom ? theme.fg("muted", "(wrote) ") : "";
 				const display = !a.wasCustom && a.indices ? `${a.indices.join(", ")}. ${a.label}` : a.label;
-				return `${theme.fg("success", "✓ ")}${theme.fg("accent", a.id)}: ${prefix}${display}`;
+				const supplement = a.supplement ? theme.fg("muted", ` (+ ${a.supplement})`) : "";
+				return `${theme.fg("success", "✓ ")}${theme.fg("accent", a.id)}: ${prefix}${display}${supplement}`;
 			});
 			return new Text(lines.join("\n"), 0, 0);
 		},

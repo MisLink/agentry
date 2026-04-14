@@ -1,0 +1,82 @@
+[
+  {
+    "query": "我下载了一个 Q4-report.pdf 在桌面上，帮我看看里面的关键数据",
+    "should_trigger": true,
+    "rationale": "Local PDF file, needs markitdown to extract text"
+  },
+  {
+    "query": "这个 YouTube 视频讲了什么？ https://www.youtube.com/watch?v=abc123",
+    "should_trigger": true,
+    "rationale": "YouTube URL transcript extraction, only markitdown can do this"
+  },
+  {
+    "query": "帮我把 ~/Documents/proposal.docx 转成 markdown 格式",
+    "should_trigger": true,
+    "rationale": "Local DOCX conversion, explicit 'convert to markdown'"
+  },
+  {
+    "query": "总结一下这个论文 https://arxiv.org/pdf/2401.12345",
+    "should_trigger": true,
+    "rationale": "PDF URL summarization, needs markitdown for PDF parsing"
+  },
+  {
+    "query": "这个 PPT 有 40 页，帮我提取核心观点：./slides/keynote.pptx",
+    "should_trigger": true,
+    "rationale": "Local PPTX, 'extract key points' = read + summarize"
+  },
+  {
+    "query": "我用 web_fetch 抓了这个页面但输出很乱，能不能换个方式试试？ https://legacy-site.com/docs",
+    "should_trigger": true,
+    "rationale": "Explicitly says web_fetch output was bad, markitdown as fallback"
+  },
+  {
+    "query": "帮我看看这个 RSS 订阅里有什么新内容 https://blog.example.com/feed.xml",
+    "should_trigger": true,
+    "rationale": "RSS feed URL, markitdown has native RSS support"
+  },
+  {
+    "query": "我有个 Jupyter notebook 叫 analysis.ipynb，帮我看看结论部分写了什么",
+    "should_trigger": true,
+    "rationale": "Local .ipynb file, needs markitdown for notebook parsing"
+  },
+  {
+    "query": "搜一下 Rust async runtime 的最新进展",
+    "should_trigger": false,
+    "rationale": "Web search request, should use web_fetch with DuckDuckGo, not markitdown"
+  },
+  {
+    "query": "帮我看看 https://docs.cloudflare.com/workers/ 这个页面的 API 文档",
+    "should_trigger": false,
+    "rationale": "Regular docs page, web_fetch with content negotiation is better first choice"
+  },
+  {
+    "query": "读一下 src/main.ts 这个文件，帮我找 bug",
+    "should_trigger": false,
+    "rationale": "Local source code file, just use the read tool directly"
+  },
+  {
+    "query": "帮我写一个 Python 脚本来处理 CSV 数据",
+    "should_trigger": false,
+    "rationale": "Code writing task, not document conversion. CSV mentioned but as output format"
+  },
+  {
+    "query": "打开 https://github.com/microsoft/markitdown 看看这个项目的 README",
+    "should_trigger": false,
+    "rationale": "GitHub page, web_fetch handles this well. Mentions markitdown but as a URL to read, not a tool to use"
+  },
+  {
+    "query": "这个 JSON 配置文件是什么意思？ cat config.json",
+    "should_trigger": false,
+    "rationale": "JSON/text file, read tool is sufficient, no conversion needed"
+  },
+  {
+    "query": "帮我把这段文字翻译成英文",
+    "should_trigger": false,
+    "rationale": "Translation task, no document conversion involved"
+  },
+  {
+    "query": "对比一下这两个 Excel 表格的差异：budget_v1.xlsx 和 budget_v2.xlsx",
+    "should_trigger": true,
+    "rationale": "Two XLSX files need markitdown to extract content before comparison"
+  }
+]

@@ -32,6 +32,7 @@ export class QuestionnaireComponent implements Component {
 	private optionIndex = 0;
 	private selectedSet = new Set<number>(); // for multi-select
 	private inputActive = false;
+	private supplementing = false;
 	private showReview = false;
 
 	/** Total number of navigable items for the current question (options + "Other" if allowOther). */
@@ -169,9 +170,15 @@ export class QuestionnaireComponent implements Component {
 			return;
 		}
 
-		// Inline input active
+		// Inline input active ("Other" custom answer)
 		if (this.inputActive) {
 			this.handleEditorInput(data);
+			return;
+		}
+
+		// Supplement mode (Tab on a regular option)
+		if (this.supplementing) {
+			this.handleSupplementInput(data);
 			return;
 		}
 
@@ -184,24 +191,12 @@ export class QuestionnaireComponent implements Component {
 			return;
 		}
 
-		// Tab navigation for multi-question (Tab / Shift+Tab only)
-		if (this.isMulti) {
-			if (matchesKey(data, Key.tab)) {
-				this.currentTab = Math.min(this.currentTab + 1, this.questions.length - 1);
-				this.optionIndex = 0;
-				this.selectedSet.clear();
-				this.applyDefault();
-				this.requestRender();
-				return;
-			}
-			if (matchesKey(data, Key.shift("tab"))) {
-				this.currentTab = Math.max(this.currentTab - 1, 0);
-				this.optionIndex = 0;
-				this.selectedSet.clear();
-				this.applyDefault();
-				this.requestRender();
-				return;
-			}
+		// Tab → supplement current option (on a real option, not "Other")
+		if (matchesKey(data, Key.tab) && !this.onOtherItem) {
+			this.supplementing = true;
+			this.editor.setText("");
+			this.requestRender();
+			return;
 		}
 
 		// ↑↓ option navigation (includes the "Other" virtual item)
@@ -269,6 +264,59 @@ export class QuestionnaireComponent implements Component {
 			}
 			return;
 		}
+	}
+
+	private handleSupplementInput(data: string): void {
+		const q = this.currentQuestion();
+		if (!q) return;
+
+		if (matchesKey(data, Key.escape)) {
+			this.supplementing = false;
+			this.editor.setText("");
+			this.requestRender();
+			return;
+		}
+
+		// Enter (not Shift+Enter) → submit option + supplement
+		if (matchesKey(data, Key.enter) && !matchesKey(data, Key.shift("enter"))) {
+			const supplement = this.editor.getText().trim() || undefined;
+
+			if (q.multiSelect) {
+				// Multi-select: save all toggled options; auto-toggle highlighted if none selected
+				if (this.selectedSet.size === 0) {
+					this.selectedSet.add(this.optionIndex);
+				}
+				const indices = [...this.selectedSet].sort();
+				const opts = indices.map((i) => q.options[i]);
+				this.answers.set(q.id, {
+					id: q.id,
+					value: opts.map((o) => o.value).join(", "),
+					label: opts.map((o) => o.label).join(", "),
+					wasCustom: false,
+					indices: indices.map((i) => i + 1),
+					supplement,
+				});
+			} else {
+				// Single-select: save highlighted option
+				const opt = q.options[this.optionIndex];
+				this.answers.set(q.id, {
+					id: q.id,
+					value: opt.value,
+					label: opt.label,
+					wasCustom: false,
+					indices: [this.optionIndex + 1],
+					supplement,
+				});
+			}
+
+			this.supplementing = false;
+			this.editor.setText("");
+			this.advanceAfterAnswer();
+			return;
+		}
+
+		this.editor.handleInput(data);
+		this.requestRender();
 	}
 
 	private handleEditorInput(data: string): void {
@@ -394,6 +442,15 @@ export class QuestionnaireComponent implements Component {
 				const indent = q.multiSelect ? "       " : "     ";
 				lines.push(truncateToWidth(`${indent}${t.fg("muted", opt.description)}`, width));
 			}
+
+			// Supplement editor (shown inline below the highlighted option)
+			if (this.supplementing && i === this.optionIndex) {
+				lines.push("");
+				for (const line of this.editor.render(width - 6)) {
+					lines.push(truncateToWidth(`      ${line}`, width));
+				}
+				lines.push(truncateToWidth(`      ${t.fg("dim", "Enter submit · Shift+Enter newline · Esc back")}`, width));
+			}
 		}
 
 		// "Other" option + inline editor (when allowOther)
@@ -424,9 +481,7 @@ export class QuestionnaireComponent implements Component {
 			parts.push(`${t.fg("dim", "Space")} toggle`);
 		}
 		parts.push(`${t.fg("dim", "Enter")} confirm`);
-		if (this.isMulti) {
-			parts.push(`${t.fg("dim", "Tab")} next`);
-		}
+		parts.push(`${t.fg("dim", "Tab")} annotate`);
 		parts.push(`${t.fg("dim", "Esc")} cancel`);
 		lines.push(truncateToWidth(` ${parts.join(" · ")}`, width));
 	}

@@ -27,6 +27,8 @@ export interface Answer {
 	wasCustom: boolean;
 	/** 1-based indices for selected options (undefined for custom answers). */
 	indices?: number[];
+	/** Additional user-provided text appended to a selected option (via Tab). */
+	supplement?: string;
 }
 
 export interface QuestionnaireResult {
