@@ -27,6 +27,7 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 	let planStartedAt = 0;
 	let pauseOnStep = false;
 	let skipConfirmations = false;
+	let pendingRefine = false;
 
 	// ── State persistence ──────────────────────────────────────────────────
 
@@ -96,11 +97,15 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 
 	type TrackingChoice = "execute" | "track-only" | "refine" | "ignore";
 
-	async function offerTracking(planSteps: PlanStep[], ctx: ExtensionContext): Promise<TrackingChoice> {
-		const choice = await ctx.ui.select(
-			`计划（${planSteps.length} 步），如何执行？`,
-			["逐步执行（每步暂停确认）", "一次性运行全部", "只追踪（手动 /done）", "继续完善", "忽略"],
-		);
+	async function offerTracking(planSteps: PlanStep[], isRefine: boolean, ctx: ExtensionContext): Promise<TrackingChoice> {
+		const planList = planSteps.map((s) => `  ${s.step}. ${s.text}`).join("\n");
+		const prompt = isRefine
+			? `修改后的计划（${planSteps.length} 步）：\n${planList}\n\n确认执行？`
+			: `计划（${planSteps.length} 步）：\n${planList}\n\n如何执行？`;
+		const options = isRefine
+			? ["逐步执行（每步暂停确认）", "一次性运行全部", "继续完善", "忽略"]
+			: ["逐步执行（每步暂停确认）", "一次性运行全部", "只追踪（手动 /done）", "继续完善", "忽略"];
+		const choice = await ctx.ui.select(prompt, options);
 		if (!choice || choice === "忽略") return "ignore";
 		if (choice === "继续完善") return "refine";
 
@@ -155,9 +160,12 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 				completed: false,
 			}));
 
-			const choice = await offerTracking(planSteps, ctx);
+			const isRefine = pendingRefine;
+			pendingRefine = false;
+			const choice = await offerTracking(planSteps, isRefine, ctx);
 
 			if (choice === "refine") {
+				pendingRefine = true;
 				const list = planSteps.map((s) => `${s.step}. ${s.text} — ${s.detail}`).join("\n");
 				return {
 					content: [{ type: "text", text: `User wants to refine the plan before starting. Current draft:\n${list}\n\nAsk the user what they'd like to change, then call create_plan again with the revised steps.` }],
