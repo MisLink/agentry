@@ -20,7 +20,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { filterPlanTrackerContextMessages, parsePlanCommand, shouldAutoPlan, shouldQueueNextStepAfterCompletion, type PlanExecutionMode, type PlanStepDraft } from "./logic.js";
+import { filterPlanTrackerContextMessages, parsePlanCommand, shouldQueueNextStepAfterCompletion, type PlanExecutionMode, type PlanStepDraft } from "./logic.js";
 import { formatElapsed, type PlanStep } from "./utils.js";
 
 export default function planTrackerExtension(pi: ExtensionAPI): void {
@@ -29,7 +29,6 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 	let planMode: PlanExecutionMode | undefined;
 	let planStartedAt = 0;
 	let pendingPlanActivation: PlanExecutionMode | undefined;
-	let lastUserPrompt = "";
 
 	// ── State persistence ──────────────────────────────────────────────────
 
@@ -171,9 +170,19 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 
 	function requestPlanDraft(prompt: string | undefined, activation: PlanExecutionMode | undefined): void {
 		pendingPlanActivation = activation;
-		const target = prompt?.trim()
-			? `针对以下任务生成一个可编辑的计划草案：\n\n${prompt.trim()}`
-			: "请基于当前对话上下文，总结一个可编辑的计划草案。";
+		const feedback = prompt?.trim();
+		const basePlan = draftSteps.length > 0 ? draftSteps : steps;
+		const shouldReviseExisting = !!feedback && activation === undefined && basePlan.length > 0;
+
+		let target: string;
+		if (shouldReviseExisting) {
+			target = `请根据反馈修订当前计划，并使用 create_plan 工具输出新的结构化步骤。\n\n当前计划：\n${formatPlanList(basePlan, true)}\n\n反馈：${feedback}`;
+		} else if (feedback) {
+			target = `针对以下任务生成一个可编辑的计划草案：\n\n${feedback}`;
+		} else {
+			target = "请基于当前对话上下文，总结一个可编辑的计划草案。";
+		}
+
 		const activationInstruction = activation === "running"
 			? "\n\n用户明确要求生成计划后直接执行。请先调用 create_plan 输出草案；插件会在草案创建后自动进入 run。"
 			: "\n\n只创建草案，不要开始执行。";
@@ -223,29 +232,31 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 		return parts.join("\n\n");
 	}
 
-	function markStepDone(stepNumber: number, ctx: ExtensionContext): boolean {
+	function completeStep(stepNumber: number, summary: string | undefined, ctx: ExtensionContext) {
 		if (steps.length === 0) {
-			ctx.ui.notify("No active plan.", "info");
-			return false;
+			return { content: "No plan is currently being tracked.", details: { success: false } };
 		}
 		if (Number.isNaN(stepNumber) || stepNumber < 1) {
-			ctx.ui.notify("Usage: /plan done <step number>", "error");
-			return false;
+			return { content: "Usage: /plan done <step number>", details: { success: false } };
 		}
+
 		const item = steps.find((step) => step.step === stepNumber);
 		if (!item) {
-			ctx.ui.notify(`Step ${stepNumber} not found.`, "error");
-			return false;
+			return { content: `Step ${stepNumber} not found in current plan.`, details: { success: false } };
 		}
 		if (item.completed) {
-			ctx.ui.notify(`Step ${stepNumber} is already complete.`, "info");
-			return false;
+			return { content: `Step ${stepNumber} is already marked complete.`, details: { success: true, step: stepNumber, alreadyDone: true } };
 		}
+
 		item.completed = true;
 		item.completedAt = Date.now();
+		if (summary) item.summary = summary;
 		updateUI(ctx);
 		persist();
-		ctx.ui.notify(`✓ Step ${stepNumber} marked complete.`, "info");
+
+		const message = summary
+			? `✓ Step ${stepNumber} complete: ${summary}`
+			: `✓ Step ${stepNumber} marked complete.`;
 
 		if (steps.every((step) => step.completed)) {
 			const log = buildWorkLog();
@@ -254,20 +265,25 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 				{ triggerTurn: false },
 			);
 			clearPlan(ctx);
-			return true;
+			return { content: `${message}\n\nAll steps complete!`, details: { success: true, step: stepNumber, planComplete: true } };
 		}
 
 		const nextStep = getCurrentStep();
-		if (!nextStep) {
-			throw new Error("Plan is missing the next pending step after /plan done");
+		if (!nextStep) throw new Error("Plan is missing the next pending step after mark_done");
+		if (!planMode) throw new Error("Tracked plan is missing its execution mode");
+
+		if (!shouldQueueNextStepAfterCompletion(planMode)) {
+			return {
+				content: `${message}\n\nNext tracked step: ${nextStep.step}. ${nextStep.text}`,
+				details: { success: true, step: stepNumber, nextStep: nextStep.step, queued: false },
+			};
 		}
-		if (!planMode) {
-			throw new Error("Tracked plan is missing its execution mode");
-		}
-		if (shouldQueueNextStepAfterCompletion(planMode)) {
-			queueExecution(nextStep);
-		}
-		return true;
+
+		queueExecution(nextStep);
+		return {
+			content: `${message}\n\nQueued step ${nextStep.step}.`,
+			details: { success: true, step: stepNumber, nextStep: nextStep.step, queued: true },
+		};
 	}
 
 	// ── create_plan tool ───────────────────────────────────────────────────
@@ -298,28 +314,6 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 			const drafts = buildPlanDrafts(params.steps);
 			const activation = pendingPlanActivation;
 			pendingPlanActivation = undefined;
-
-			if (!activation) {
-				const decision = shouldAutoPlan({
-					prompt: lastUserPrompt,
-					steps: drafts,
-					hasActivePlan: steps.length > 0,
-				});
-				if (!decision.allow) {
-					const current = getCurrentStep();
-					const baseMessage =
-						decision.reason === "straightforward-task"
-							? "Skip plan draft: current task looks straightforward. Continue execution directly unless user explicitly asks for a plan."
-							: "Skip plan draft: task is not complex enough for explicit planning yet. Continue execution directly. If complexity grows, you can propose a plan later.";
-					const currentMessage = current
-						? `\n\nCurrent tracked step: ${current.step}. ${current.text}`
-						: "";
-					return {
-						content: [{ type: "text", text: `${baseMessage}${currentMessage}` }],
-						details: { success: false, skipped: true, reason: decision.reason, signals: decision.signals },
-					};
-				}
-			}
 
 			const planSteps = materializePlanSteps(drafts);
 			setDraft(planSteps, ctx);
@@ -357,69 +351,10 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 			summary: Type.Optional(Type.String({ description: "Brief summary of what was accomplished (optional)" })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			if (steps.length === 0) {
-				return {
-					content: [{ type: "text", text: "No plan is currently being tracked." }],
-					details: { success: false },
-				};
-			}
-
-			const item = steps.find((step) => step.step === params.step);
-			if (!item) {
-				return {
-					content: [{ type: "text", text: `Step ${params.step} not found in current plan.` }],
-					details: { success: false },
-				};
-			}
-			if (item.completed) {
-				return {
-					content: [{ type: "text", text: `Step ${params.step} is already marked complete.` }],
-					details: { success: true, step: params.step, alreadyDone: true },
-				};
-			}
-
-			item.completed = true;
-			item.completedAt = Date.now();
-			if (params.summary) item.summary = params.summary;
-			updateUI(ctx);
-			persist();
-
-			const message = params.summary
-				? `✓ Step ${params.step} complete: ${params.summary}`
-				: `✓ Step ${params.step} marked complete.`;
-
-			if (steps.every((step) => step.completed)) {
-				const log = buildWorkLog();
-				pi.sendMessage(
-					{ customType: "plan-tracker-complete", content: log, display: true },
-					{ triggerTurn: false },
-				);
-				clearPlan(ctx);
-				return {
-					content: [{ type: "text", text: `${message}\n\nAll steps complete!` }],
-					details: { success: true, step: params.step, planComplete: true },
-				};
-			}
-
-			const nextStep = getCurrentStep();
-			if (!nextStep) {
-				throw new Error("Plan is missing the next pending step after mark_done");
-			}
-			if (!planMode) {
-				throw new Error("Tracked plan is missing its execution mode");
-			}
-
-			if (!shouldQueueNextStepAfterCompletion(planMode)) {
-				return {
-					content: [{ type: "text", text: `${message}\n\nNext tracked step: ${nextStep.step}. ${nextStep.text}` }],
-					details: { success: true, step: params.step, nextStep: nextStep.step, queued: false },
-				};
-			}
-
-			queueExecution(nextStep);
+			const result = completeStep(params.step, params.summary, ctx);
 			return {
-				content: [{ type: "text", text: `${message}\n\nQueued step ${nextStep.step}.` }],
-				details: { success: true, step: params.step, nextStep: nextStep.step, queued: true },
+				content: [{ type: "text", text: result.content }],
+				details: result.details,
 			};
 		},
 	});
@@ -427,7 +362,7 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 	// ── /plan command ──────────────────────────────────────────────────────
 
 	pi.registerCommand("plan", {
-		description: "Manage plan drafts: /plan [task], /plan track, /plan run [task], /plan done <step>, /plan refine <feedback>, /plan clear",
+		description: "Manage plan drafts: /plan [task or feedback], /plan track, /plan run [task], /plan done <step>, /plan clear",
 		handler: async (args, ctx) => {
 			const command = parsePlanCommand(args);
 			if (command.action === "draft") {
@@ -452,22 +387,9 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 				}
 				return;
 			}
-			if (command.action === "refine") {
-				if (!command.feedback) {
-					ctx.ui.notify("Usage: /plan refine <feedback>", "info");
-					return;
-				}
-				const basePlan = draftSteps.length > 0 ? draftSteps : steps;
-				if (basePlan.length === 0) {
-					ctx.ui.notify("No plan draft or active plan to refine.", "info");
-					return;
-				}
-				const list = formatPlanList(basePlan, true);
-				pi.sendUserMessage(`请根据反馈修改当前计划草案，并使用 create_plan 工具输出新的结构化步骤。\n\n当前计划：\n${list}\n\n反馈：${command.feedback}`);
-				return;
-			}
 			if (command.action === "done") {
-				markStepDone(command.step, ctx);
+				const result = completeStep(command.step, undefined, ctx);
+				ctx.ui.notify(result.content, result.details.success ? "info" : "error");
 				return;
 			}
 			if (command.action === "clear") {
@@ -484,8 +406,7 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 
 	// ── Context injection ──────────────────────────────────────────────────
 
-	pi.on("before_agent_start", async (event) => {
-		lastUserPrompt = event.prompt;
+	pi.on("before_agent_start", async (_event) => {
 		if (steps.length === 0) return;
 		if (!planMode) {
 			throw new Error("Tracked plan is missing its execution mode");

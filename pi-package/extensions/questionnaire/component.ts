@@ -107,6 +107,64 @@ export class QuestionnaireComponent implements Component {
 		return this.questions.every((q) => this.answers.has(q.id));
 	}
 
+	private currentQuestionAnswered(): boolean {
+		const q = this.currentQuestion();
+		return !!q && this.answers.has(q.id);
+	}
+
+	private restoreSelectionState(): void {
+		const q = this.currentQuestion();
+		if (!q) return;
+
+		this.optionIndex = 0;
+		this.selectedSet.clear();
+		this.applyDefault();
+
+		const answer = this.answers.get(q.id);
+		if (!answer) return;
+
+		if (answer.wasCustom) {
+			if (q.allowOther) this.optionIndex = q.options.length;
+			return;
+		}
+
+		const indices = (answer.indices ?? [])
+			.map((i) => i - 1)
+			.filter((i) => i >= 0 && i < q.options.length);
+		if (indices.length === 0) return;
+
+		this.optionIndex = indices[0];
+		if (q.multiSelect) {
+			this.selectedSet = new Set(indices);
+		}
+	}
+
+	private switchToQuestion(index: number): void {
+		if (index < 0 || index >= this.questions.length) return;
+
+		this.showReview = false;
+		this.inputActive = false;
+		this.supplementing = false;
+		this.editor.setText("");
+		this.currentTab = index;
+		this.restoreSelectionState();
+		this.requestRender();
+	}
+
+	private switchToNextOrReview(): void {
+		if (!this.currentQuestionAnswered()) return;
+
+		if (this.currentTab < this.questions.length - 1) {
+			this.switchToQuestion(this.currentTab + 1);
+			return;
+		}
+
+		if (this.allAnswered()) {
+			this.showReview = true;
+			this.requestRender();
+		}
+	}
+
 	// ── Answer management ──────────────────────────────────────────────
 
 	private saveOptionAnswer(q: Question, selectedIndices: number[]): void {
@@ -132,6 +190,7 @@ export class QuestionnaireComponent implements Component {
 
 	private advanceAfterAnswer(): void {
 		this.inputActive = false;
+		this.supplementing = false;
 		this.editor.setText("");
 		this.selectedSet.clear();
 
@@ -141,16 +200,7 @@ export class QuestionnaireComponent implements Component {
 			return;
 		}
 
-		if (this.currentTab < this.questions.length - 1) {
-			this.currentTab++;
-			this.optionIndex = 0;
-			this.applyDefault();
-			this.requestRender();
-		} else {
-			// Last question answered: show review
-			this.showReview = true;
-			this.requestRender();
-		}
+		this.switchToNextOrReview();
 	}
 
 	private submit(cancelled: boolean): void {
@@ -191,10 +241,20 @@ export class QuestionnaireComponent implements Component {
 			return;
 		}
 
+		// ←/→ question navigation. Moving forward requires the current question to be answered.
+		if (this.isMulti && matchesKey(data, Key.left)) {
+			this.switchToQuestion(this.currentTab - 1);
+			return;
+		}
+		if (this.isMulti && matchesKey(data, Key.right)) {
+			this.switchToNextOrReview();
+			return;
+		}
+
 		// Tab → supplement current option (on a real option, not "Other")
 		if (matchesKey(data, Key.tab) && !this.onOtherItem) {
 			this.supplementing = true;
-			this.editor.setText("");
+			this.editor.setText(this.answers.get(q.id)?.supplement ?? "");
 			this.requestRender();
 			return;
 		}
@@ -233,9 +293,13 @@ export class QuestionnaireComponent implements Component {
 			return;
 		}
 
-		// Space: toggle in multi-select
+		// Space: toggle in multi-select. "Other" is not a selectable option index.
 		if (matchesKey(data, Key.space) && q.multiSelect) {
-			if (this.selectedSet.has(this.optionIndex)) {
+			if (this.onOtherItem) {
+				this.inputActive = true;
+				const answer = this.answers.get(q.id);
+				this.editor.setText(answer?.wasCustom ? answer.label : "");
+			} else if (this.selectedSet.has(this.optionIndex)) {
 				this.selectedSet.delete(this.optionIndex);
 			} else {
 				this.selectedSet.add(this.optionIndex);
@@ -249,7 +313,8 @@ export class QuestionnaireComponent implements Component {
 			if (this.onOtherItem) {
 				// Activate inline editor for custom answer
 				this.inputActive = true;
-				this.editor.setText("");
+				const answer = this.answers.get(q.id);
+				this.editor.setText(answer?.wasCustom ? answer.label : "");
 				this.requestRender();
 				return;
 			}
@@ -353,17 +418,8 @@ export class QuestionnaireComponent implements Component {
 			this.submit(true);
 			return;
 		}
-		// Number key → jump back to that question
-		if (data >= "1" && data <= "9") {
-			const idx = parseInt(data, 10) - 1;
-			if (idx < this.questions.length) {
-				this.showReview = false;
-				this.currentTab = idx;
-				this.optionIndex = 0;
-				this.selectedSet.clear();
-				this.applyDefault();
-				this.requestRender();
-			}
+		if (matchesKey(data, Key.left)) {
+			this.switchToQuestion(this.questions.length - 1);
 			return;
 		}
 	}
@@ -475,6 +531,9 @@ export class QuestionnaireComponent implements Component {
 		lines.push("");
 		if (this.inputActive) return; // help already shown above
 		const parts: string[] = [];
+		if (this.isMulti) {
+			parts.push(`${t.fg("dim", "←/→")} questions`);
+		}
 		parts.push(`${t.fg("dim", "↑↓")} nav`);
 		parts.push(`${t.fg("dim", "1-9")} quick`);
 		if (q.multiSelect) {
@@ -507,13 +566,13 @@ export class QuestionnaireComponent implements Component {
 
 		lines.push("");
 		if (this.allAnswered()) {
-			lines.push(truncateToWidth(` ${t.fg("success", "Enter to submit")} · ${t.fg("dim", "1-9 edit · Esc cancel")}`, width));
+			lines.push(truncateToWidth(` ${t.fg("success", "Enter to submit")} · ${t.fg("dim", "← edit · Esc cancel")}`, width));
 		} else {
 			const missing = this.questions
 				.filter((q) => !this.answers.has(q.id))
 				.map((q) => q.label)
 				.join(", ");
-			lines.push(truncateToWidth(` ${t.fg("warning", `Unanswered: ${missing}`)} · ${t.fg("dim", "1-9 edit · Esc cancel")}`, width));
+			lines.push(truncateToWidth(` ${t.fg("warning", `Unanswered: ${missing}`)} · ${t.fg("dim", "← edit · Esc cancel")}`, width));
 		}
 	}
 
