@@ -15,7 +15,7 @@ function includes(text: string, expected: string): boolean {
 test("AGENTS documents every shipped extension surfaced to users", () => {
 	assert.equal(includes(agentsDoc, "├── notify/"), true, "AGENTS tree should list notify extension");
 	assert.equal(
-		includes(agentsDoc, "| **review** | `/review`、`/review status`、`/review off` |"),
+		includes(agentsDoc, "| **review** | `/review`、`/end-review`、`/review status` |"),
 		true,
 		"AGENTS table should list review session commands",
 	);

@@ -12,7 +12,7 @@ agentry/
 │   └── extensions/
 │       ├── btw/        # 侧边栏对话浮层（/btw 或 Ctrl+Alt+B）
 │       ├── plan-tracker/ # 非模态计划追踪（/plan）
-│       ├── review/     # AI 代码审查（/review、/review status、/review off）
+│       ├── review/     # AI 代码审查（/review、/end-review、/review status）
 │       ├── static-check/ # 多语言静态检查（tsc/mypy/golangci-lint/go vet/cargo）
 │       ├── files/       # 交互式文件浏览器（/files、/diff）
 │       ├── web-search/ # web_search + web_fetch + get_search_content 工具
@@ -35,7 +35,7 @@ agentry/
 |------|------------|------|
 | **btw** | `/btw`、`Ctrl+Alt+B` | 侧边悬浮对话，不污染主 session |
 | **plan-tracker** | `/plan` | 非模态计划检测 + 执行追踪 + 工作日志 |
-| **review** | `/review`、`/review status`、`/review off` | 当前 session 内的只读 AI 代码审查，支持风险分层、P0-P3 rubric、review_context 和增量复审记忆 |
+| **review** | `/review`、`/end-review`、`/review status` | 单 session AI 代码审查：支持 git/jj、未提交改动、分支 diff、commit、GitLab MR（glab + 临时 worktree）、GitHub PR（gh + 临时 worktree）、`--extra` 即兴 instruction；结束时三选项仅返回 / 返回并总结 / 返回并修复，`navigateTree` summarize 产出结构化 fix checklist 注入主 session |
 | **static-check** | `/staticcheck` | 编辑文件后自动运行类型检查，可自动修复 |
 | **files** | `/files`、`/diff` | 交互式文件浏览器（模糊搜索 + open/reveal/diff） |
 | **web-search** | `web_search` + `web_fetch` + `get_search_content` tools | `web_search` 用于 DuckDuckGo 搜索，`web_fetch` 用于 URL 内容抓取，`get_search_content` 用于读取之前搜索/抓取结果的完整缓存内容（二进制 URL 自动 fallback 到 markitdown） |
@@ -70,7 +70,7 @@ agentry/
 
 ### 代码风格
 - 扩展代码使用 TypeScript，文件顶部有 JSDoc 描述命令和功能
-- 中文注释/文档用于面向用户的说明（error message、命令说明等）；review rubric/prompt 模板可用英文维护，最终 review 输出语言由 language 模块控制
+- 中文注释/文档用于面向用户的说明（error message、命令说明等）；review rubric 可用英文维护，最终 review 输出语言固定中文（见 `pi-package/extensions/review/prompts.ts` 的 `LANGUAGE_INSTRUCTION`）
 - 英文注释用于代码逻辑
 
 ## 常用命令

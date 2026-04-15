@@ -1,25 +1,32 @@
 /**
- * Review Extension
+ * 代码审查扩展
  *
- * 为代码改动提供 AI 驱动的只读代码审查。
+ * 为代码改动提供 AI 驱动的只读审查。设计参考：
+ *   - mitsuhiko/agent-stuff 的 `/review` + `/end-review`：会话内分叉 +
+ *     navigateTree 总结 + 仅返回 / 返回并总结 / 返回并修复三选项
+ *   - Cloudflare AI code review 博文：审查准则里“什么不该指出”的写法、
+ *     噪声过滤、boundary tag 清洗防提示词注入
  *
  * 特性：
- * - 在当前 session 内运行 review，不创建后台 job
- * - 支持 git 和 jj (Jujutsu) 版本控制
- * - 支持审查未提交改动、分支 diff、特定 commit
- * - 按风险分层、文件类型和项目规则构建高信号 review prompt
- * - 提供只读 review_context 工具，按需读取 diff、文件、hunk 和摘录
+ * - git 与 jj (Jujutsu) 双 VCS 支持
+ * - 审查未提交改动 / 相对分支差异 / 单个提交 / Merge Request（glab）/
+ *   Pull Request（gh）
+ * - `/review --extra "..."` 即兴附加指令
+ * - `/end-review` 三选项收尾：自动 navigateTree 总结产出结构化修复清单
+ *   注入主会话
  *
  * 用法：
- *   /review               — 交互式选择审查目标
- *   /review uncommitted   — 审查未提交改动
- *   /review branch <name> — 审查相对某分支/bookmark 的 diff
- *   /review commit <rev>  — 审查某个 commit/change
- *   /review status        — 查看当前 review 状态
- *   /review off           — 结束 review 并返回主 session
+ *   /review                  交互式选择
+ *   /review uncommitted      未提交改动
+ *   /review branch <名称>     相对某分支 / bookmark
+ *   /review commit <提交ID>   某个提交 / jj change
+ *   /review mr <编号>         当前仓库的 GitLab MR（glab 取信息 + 临时 worktree）
+ *   /review pr <编号>         当前仓库的 GitHub PR（gh 取信息 + 临时 worktree）
+ *   /review status           查看当前审查状态
+ *   /end-review              结束审查，三选项
  *
- * 项目级审查规范：在 .pi 目录所在的项目根放 REVIEW_GUIDELINES.md，
- * 内容会自动追加到 rubric 末尾。
+ * 项目级审查规范：在 .pi 目录所在的项目根放 REVIEW_GUIDELINES.md，内容会
+ * 自动追加到审查提示词（boundary tag 自动剥离）。
  */
 
 import {
@@ -30,66 +37,51 @@ import {
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { Type } from "@sinclair/typebox";
 import { notifyBeforePrompt } from "../notify/index.js";
-import {
-	assessReviewPlan,
-	buildReviewStrategyPrompt,
-	sanitizePromptInput,
-	type ReviewEntry,
-} from "./strategy.js";
-import {
-	buildReviewCollectionPlan,
-	mergeReviewEntries,
-	parseReviewCollectionOutput,
-} from "./diff.js";
-import {
-	buildReviewContext,
-	createReviewContextTool,
-	type ReviewContext,
-} from "./review-context.js";
-import { REVIEW_RUBRIC } from "./rubric.js";
-import {
-	applyFindingFeedback,
-	buildReviewTargetKey,
-	buildRereviewPromptSection,
-	compactReviewSummary,
-	extractReviewFindings,
-	findPreviousReviewMemory,
-	mergeReviewMemory,
-	type ReviewMemory,
-} from "./history.js";
-import { buildReviewLanguageInstructionFromUserTexts } from "./language.js";
 import { selectModelForExtension } from "../../lib/model-selector.js";
-import { extractLastAssistantText, extractLastUserText } from "./session-result.js";
-import { buildReviewWidgetLine } from "./status.js";
-import { claimReviewWidgetRuntime } from "./widget-runtime.js";
+import {
+	buildReviewPrompt,
+	REVIEW_FIX_FINDINGS_PROMPT,
+	REVIEW_SUMMARY_PROMPT,
+} from "./prompts.ts";
+import {
+	type ReviewTarget,
+	type ReviewVcs,
+	detectVCS,
+	getCurrentBranch,
+	getLocalBranches,
+	getMergeBase,
+	getRecentCommits,
+	getSmartDefault,
+	getTargetLabel,
+	jjCurrentBookmarks,
+} from "./vcs.ts";
+import {
+	cleanupMrWorktree,
+	createMrWorktree,
+	type MrProvider,
+	type ReviewWorktree,
+	prepareMrTarget,
+} from "./pr.ts";
+import { sanitizePromptBlock } from "./sanitize.ts";
 
-// ─── VCS Detection ───────────────────────────────────────────────────────────
+// ─── 状态 ────────────────────────────────────────────────────────────────────
 
-async function detectVCS(pi: ExtensionAPI): Promise<"git" | "jj"> {
-	const { code: jjCode } = await pi.exec("jj", ["--ignore-working-copy", "root"]);
-	if (jjCode === 0) return "jj";
-	return "git";
-}
+type ReviewSession = {
+	originId: string | undefined;
+	targetLabel: string;
+	startedAtMs: number;
+	completedTotalMs: number | undefined;
+	preReviewModel: Model<Api> | null | undefined;
+	// undefined = 未切换；null = 从“无模型”切换过来（还原时无需 setModel）
+	worktree: ReviewWorktree | undefined;
+};
 
-// ─── State ───────────────────────────────────────────────────────────────────
-
-let reviewOriginId: string | undefined = undefined;
-let preReviewModel: import("@mariozechner/pi-ai").Model<Api> | null | undefined = undefined;
-// undefined = not in review; null = was in review but original had no model; Model = original model to restore
-let reviewTargetLabel: string | undefined = undefined;
-let reviewStartedAtMs: number | undefined = undefined;
-let reviewCompletedTotalMs: number | undefined = undefined;
-let currentReviewTargetKey: string | undefined = undefined;
-let currentReviewContext: ReviewContext | undefined = undefined;
-let latestReviewCommandCtx: ExtensionCommandContext | undefined = undefined;
+let currentSession: ReviewSession | undefined;
 
 const REVIEW_STATE_TYPE = "review-session";
-const REVIEW_RESULT_TYPE = "review-result";
-const REVIEW_CONTEXT_TOOL_NAME = "review_context";
 const REVIEW_COMMAND_DESCRIPTION =
-	"审查代码改动。用法：/review [uncommitted | branch <name> | commit <rev> | status | off]";
+	"审查代码改动。用法：/review [uncommitted | branch <名称> | commit <提交 ID> | mr <编号> | pr <编号> | status] [--extra \"...\"]";
 
 type ReviewSessionState = {
 	active: boolean;
@@ -97,144 +89,11 @@ type ReviewSessionState = {
 	targetLabel?: string;
 	startedAtMs?: number;
 	completedTotalMs?: number;
-	targetKey?: string;
+	worktreePath?: string;
+	worktreeRef?: string;
 };
 
-type ReviewResultState = ReviewMemory & {
-	targetLabel?: string;
-};
-
-type ReviewTarget =
-	| { type: "uncommitted" }
-	| { type: "baseBranch"; branch: string }
-	| { type: "commit"; sha: string; title?: string };
-
-// ─── Git helpers ─────────────────────────────────────────────────────────────
-
-async function gitMergeBase(pi: ExtensionAPI, branch: string): Promise<string | null> {
-	try {
-		const { stdout: upstream, code: upstreamCode } = await pi.exec("git", [
-			"rev-parse", "--abbrev-ref", `${branch}@{upstream}`,
-		]);
-		if (upstreamCode === 0 && upstream.trim()) {
-			const { stdout: mergeBase, code } = await pi.exec("git", ["merge-base", "HEAD", upstream.trim()]);
-			if (code === 0 && mergeBase.trim()) return mergeBase.trim();
-		}
-		const { stdout: mergeBase, code } = await pi.exec("git", ["merge-base", "HEAD", branch]);
-		if (code === 0 && mergeBase.trim()) return mergeBase.trim();
-		return null;
-	} catch {
-		return null;
-	}
-}
-
-async function gitLocalBranches(pi: ExtensionAPI): Promise<string[]> {
-	const { stdout, code } = await pi.exec("git", ["branch", "--format=%(refname:short)"]);
-	if (code !== 0) return [];
-	return stdout.trim().split("\n").filter((branch) => branch.trim());
-}
-
-async function gitCurrentBranch(pi: ExtensionAPI): Promise<string | null> {
-	const { stdout, code } = await pi.exec("git", ["branch", "--show-current"]);
-	return code === 0 && stdout.trim() ? stdout.trim() : null;
-}
-
-async function gitRecentCommits(
-	pi: ExtensionAPI,
-	limit = 15,
-): Promise<Array<{ sha: string; title: string }>> {
-	const { stdout, code } = await pi.exec("git", ["log", "--oneline", "-n", `${limit}`]);
-	if (code !== 0) return [];
-	return stdout
-		.trim()
-		.split("\n")
-		.filter((line) => line.trim())
-		.map((line) => {
-			const [sha, ...rest] = line.trim().split(" ");
-			return { sha: sha ?? "", title: rest.join(" ") };
-		});
-}
-
-// ─── JJ helpers ──────────────────────────────────────────────────────────────
-
-async function jjCurrentBookmarks(pi: ExtensionAPI): Promise<string[]> {
-	const { stdout, code } = await pi.exec("jj", [
-		"--ignore-working-copy", "bookmark", "list", "-r", "@", "--template", 'name ++ "\\n"',
-	]);
-	if (code !== 0) return [];
-	return [...new Set(stdout.trim().split("\n").filter((bookmark) => bookmark.trim()))];
-}
-
-async function jjBookmarks(pi: ExtensionAPI): Promise<string[]> {
-	const { stdout, code } = await pi.exec("jj", [
-		"--ignore-working-copy", "bookmark", "list", "--template", 'name ++ "\\n"',
-	]);
-	if (code !== 0) return [];
-	return [...new Set(stdout.trim().split("\n").filter((bookmark) => bookmark.trim()))];
-}
-
-async function jjRecentChanges(
-	pi: ExtensionAPI,
-	limit = 15,
-): Promise<Array<{ sha: string; title: string }>> {
-	const { stdout, code } = await pi.exec("jj", [
-		"--ignore-working-copy", "log", "--no-graph", "-n", `${limit}`,
-		"--template",
-		`change_id.shortest() ++ "  " ++ description.first_line() ++ "\\n"`,
-	]);
-	if (code !== 0) return [];
-	return stdout
-		.trim()
-		.split("\n")
-		.filter((line) => line.trim())
-		.map((line) => {
-			const [sha, ...rest] = line.trim().split("  ");
-			return { sha: sha ?? "", title: rest.join("  ").trim() };
-		});
-}
-
-async function getMergeBase(pi: ExtensionAPI, branch: string): Promise<string | null> {
-	const vcs = await detectVCS(pi);
-	if (vcs === "jj") return branch;
-	return gitMergeBase(pi, branch);
-}
-
-async function getLocalBranches(pi: ExtensionAPI): Promise<string[]> {
-	const vcs = await detectVCS(pi);
-	if (vcs === "jj") return jjBookmarks(pi);
-	return gitLocalBranches(pi);
-}
-
-async function getCurrentBranch(pi: ExtensionAPI): Promise<string | null> {
-	const vcs = await detectVCS(pi);
-	if (vcs === "jj") return null;
-	return gitCurrentBranch(pi);
-}
-
-async function getRecentCommits(
-	pi: ExtensionAPI,
-	limit = 15,
-): Promise<Array<{ sha: string; title: string }>> {
-	const vcs = await detectVCS(pi);
-	if (vcs === "jj") return jjRecentChanges(pi, limit);
-	return gitRecentCommits(pi, limit);
-}
-
-// ─── Utilities ───────────────────────────────────────────────────────────────
-
-function extractUserTextsFromEntries(entries: Array<{ type?: string; message?: { role?: string; content?: unknown } }>): string[] {
-	return entries
-		.filter((entry) => entry.type === "message" && entry.message?.role === "user")
-		.map((entry) => extractLastUserText([entry.message!]))
-		.filter((text): text is string => Boolean(text));
-}
-
-function getPreviousReviewMemory(entries: Array<{ type?: string; customType?: string; data?: unknown }>, targetKey: string): ReviewMemory | null {
-	const memories = entries
-		.filter((entry) => entry.type === "custom" && entry.customType === REVIEW_RESULT_TYPE)
-		.map((entry) => entry.data as ReviewResultState);
-	return findPreviousReviewMemory(memories, targetKey);
-}
+// ─── 项目级审查规范 ──────────────────────────────────────────────────────────
 
 async function loadProjectReviewGuidelines(cwd: string): Promise<string | null> {
 	let currentDir = path.resolve(cwd);
@@ -245,746 +104,719 @@ async function loadProjectReviewGuidelines(cwd: string): Promise<string | null> 
 		if (piStats?.isDirectory()) {
 			const guidelineStats = await fs.stat(guidelinesPath).catch(() => null);
 			if (!guidelineStats?.isFile()) return null;
-			const content = await fs.readFile(guidelinesPath, "utf8");
+			const content = await fs.readFile(guidelinesPath, "utf8").catch((err: NodeJS.ErrnoException) => {
+				if (err.code === "ENOENT") return null;
+				throw err;
+			});
+			if (content === null) return null;
 			return content.trim() || null;
 		}
-		const parentDir = path.dirname(currentDir);
-		if (parentDir === currentDir) return null;
-		currentDir = parentDir;
+		const parent = path.dirname(currentDir);
+		if (parent === currentDir) return null;
+		currentDir = parent;
 	}
 }
 
-async function buildReviewRubricText(cwd: string): Promise<string> {
-	const guidelines = await loadProjectReviewGuidelines(cwd);
-	const rubricSections = [
-		REVIEW_RUBRIC,
-		guidelines ? `## Project-Specific Review Guidelines\n\n${sanitizePromptInput(guidelines)}` : "",
-	].filter((section) => section);
-	return rubricSections.join("\n\n---\n\n");
-}
+// ─── 命令参数解析 ────────────────────────────────────────────────────────────
 
-async function collectReviewEntries(pi: ExtensionAPI, target: ReviewTarget, vcs: "git" | "jj"): Promise<ReviewEntry[]> {
-	const mergeBase = target.type === "baseBranch" && vcs === "git"
-		? await getMergeBase(pi, target.branch)
-		: undefined;
-	const plan = buildReviewCollectionPlan({ vcs, target, mergeBase });
-	const outputs = await Promise.all(plan.commands.map((command) => pi.exec(vcs, command.args)));
-	return mergeReviewEntries(outputs.flatMap((output, index) => {
-		if (output.code !== 0) return [];
-		const command = plan.commands[index];
-		if (!command) return [];
-		return parseReviewCollectionOutput(command, output.stdout);
-	}));
-}
+/** 按 shell 风格切分参数，保留单双引号内空格（让 --extra "..." 可用）。 */
+type TokenizeResult = { ok: true; tokens: string[] } | { ok: false; error: string };
 
-const MAX_REVIEW_SNAPSHOT_CHARS = 40_000;
-const MAX_REVIEW_FILE_CHARS = 20_000;
-const MAX_REVIEW_FILE_DIFF_CHARS = 20_000;
-
-function withReviewContextToolParameters<T extends ReturnType<typeof createReviewContextTool>>(tool: T) {
-	return {
-		...tool,
-		parameters: Type.Object({
-			kind: Type.Union([
-				Type.Literal("diff"),
-				Type.Literal("file"),
-				Type.Literal("list-files"),
-				Type.Literal("file-diff"),
-				Type.Literal("file-meta"),
-				Type.Literal("file-excerpt"),
-				Type.Literal("search"),
-				Type.Literal("list-hunks"),
-				Type.Literal("hunk-excerpt"),
-			]),
-			path: Type.Optional(Type.String({ description: "Changed file path when querying file, file-diff, file-meta, file-excerpt, list-hunks, or hunk-excerpt" })),
-			startLine: Type.Optional(Type.Number({ description: "1-based start line for file-excerpt" })),
-			endLine: Type.Optional(Type.Number({ description: "1-based end line for file-excerpt" })),
-			query: Type.Optional(Type.String({ description: "Search query for search mode" })),
-			maxResults: Type.Optional(Type.Number({ description: "Maximum number of search matches to return" })),
-			hunkId: Type.Optional(Type.String({ description: "Hunk ID for hunk-excerpt" })),
-		}),
-	};
-}
-
-function makeReviewContextCustomTool(contextProvider: () => ReviewContext | undefined) {
-	return withReviewContextToolParameters(createReviewContextTool(contextProvider, {
-		name: REVIEW_CONTEXT_TOOL_NAME,
-		label: "Review Context",
-		description: "Read-only shared review context for the active /review session.",
-		promptSnippet: "Use review_context to inspect the active review's shared diff snapshot, changed files, per-file diffs, hunks, metadata, and excerpts on demand.",
-		promptGuidelines: [
-			"When a /review session is active, prefer review_context over requesting or duplicating the full diff in prompts.",
-			"Start with review_context({ kind: 'list-files' }) or review_context({ kind: 'diff' }), then fetch file-diff, list-hunks, hunk-excerpt, file-meta, search, or file-excerpt for targeted inspection.",
-			"review_context is read-only. Do not use it for edits.",
-		],
-	}));
-}
-
-function makeVisibleReviewContextTool() {
-	return makeReviewContextCustomTool(() => currentReviewContext);
-}
-
-function clipReviewSnapshot(text: string): string {
-	const normalized = text.trim();
-	if (normalized.length <= MAX_REVIEW_SNAPSHOT_CHARS) return normalized;
-	return `${normalized.slice(0, MAX_REVIEW_SNAPSHOT_CHARS)}\n\n[truncated review snapshot]`;
-}
-
-function clipReviewFileContent(text: string): string {
-	const normalized = text.trim();
-	if (normalized.length <= MAX_REVIEW_FILE_CHARS) return normalized;
-	return `${normalized.slice(0, MAX_REVIEW_FILE_CHARS)}\n\n[truncated review file]`;
-}
-
-function clipReviewFileDiff(text: string): string {
-	const normalized = text.trim();
-	if (normalized.length <= MAX_REVIEW_FILE_DIFF_CHARS) return normalized;
-	return `${normalized.slice(0, MAX_REVIEW_FILE_DIFF_CHARS)}\n\n[truncated review diff]`;
-}
-
-function formatReviewSnapshotSection(command: string, output: { code: number; stdout: string; stderr: string }): string {
-	const body = output.stdout.trim() || output.stderr.trim() || "(empty)";
-	return `### \`${command}\`\n(exit ${output.code})\n${body}`;
-}
-
-async function collectReviewSnapshot(
-	pi: ExtensionAPI,
-	target: ReviewTarget,
-	vcs: "git" | "jj",
-): Promise<string> {
-	const commands: Array<{ binary: "git" | "jj"; args: string[] }> = [];
-	if (vcs === "jj") {
-		switch (target.type) {
-			case "uncommitted":
-				commands.push(
-					{ binary: "jj", args: ["status"] },
-					{ binary: "jj", args: ["diff"] },
-				);
-				break;
-			case "baseBranch": {
-				const mergeBaseRevset = `heads(::@ & ::${target.branch})`;
-				commands.push(
-					{ binary: "jj", args: ["log", "-r", mergeBaseRevset, "--no-graph"] },
-					{ binary: "jj", args: ["diff", "--from", mergeBaseRevset, "--to", "@"] },
-				);
-				break;
+function tokenizeArgs(value: string): TokenizeResult {
+	const tokens: string[] = [];
+	let current = "";
+	let quote: '"' | "'" | null = null;
+	for (let i = 0; i < value.length; i++) {
+		const char = value[i] ?? "";
+		if (quote) {
+			if (char === "\\" && i + 1 < value.length) {
+				current += value[i + 1];
+				i += 1;
+				continue;
 			}
-			case "commit":
-				commands.push({ binary: "jj", args: ["--ignore-working-copy", "diff", "-r", target.sha] });
-				break;
-		}
-	} else {
-		switch (target.type) {
-			case "uncommitted":
-				commands.push(
-					{ binary: "git", args: ["status", "--porcelain"] },
-					{ binary: "git", args: ["diff"] },
-					{ binary: "git", args: ["diff", "--staged"] },
-				);
-				break;
-			case "baseBranch": {
-				const mergeBase = await getMergeBase(pi, target.branch);
-				commands.push({ binary: "git", args: ["diff", mergeBase ?? `${target.branch}...HEAD`] });
-				break;
+			if (char === quote) {
+				quote = null;
+				continue;
 			}
-			case "commit":
-				commands.push({ binary: "git", args: ["show", target.sha] });
-				break;
+			current += char;
+			continue;
 		}
+		if (char === '"' || char === "'") {
+			quote = char;
+			continue;
+		}
+		if (/\s/.test(char)) {
+			if (current) {
+				tokens.push(current);
+				current = "";
+			}
+			continue;
+		}
+		current += char;
 	}
-	const outputs = await Promise.all(commands.map((command) => pi.exec(command.binary, command.args)));
-	const sections = outputs.map((output, index) => {
-		const command = commands[index];
-		if (!command) return "";
-		return formatReviewSnapshotSection(`${command.binary} ${command.args.join(" ")}`, output);
-	}).filter(Boolean);
-	return clipReviewSnapshot(sections.join("\n\n"));
-}
-
-async function collectReviewFileArtifacts(
-	ctx: ExtensionContext,
-	plan: ReturnType<typeof assessReviewPlan>,
-): Promise<{
-	files: Array<{ path: string; content: string }>;
-	fileMetadata: Array<{ path: string; state: "available" | "deleted" | "binary" | "unreadable"; lineCount?: number; reason?: string }>;
-}> {
-	const results = await Promise.all(plan.includedEntries.map(async (entry) => {
-		const absolutePath = path.join(ctx.cwd, entry.path);
-		try {
-			const buffer = await fs.readFile(absolutePath);
-			if (buffer.includes(0)) return { path: entry.path, state: "binary" as const };
-			const content = buffer.toString("utf8");
-			return {
-				path: entry.path,
-				state: "available" as const,
-				content: clipReviewFileContent(content),
-				lineCount: content.split(/\r?\n/).length,
-			};
-		} catch (error) {
-			const code = typeof error === "object" && error && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
-			if (code === "ENOENT") return { path: entry.path, state: "deleted" as const };
-			return {
-				path: entry.path,
-				state: "unreadable" as const,
-				reason: error instanceof Error ? error.message : String(error),
-			};
-		}
-	}));
-	return {
-		files: results
-			.filter((item): item is { path: string; state: "available"; content: string; lineCount: number } => item.state === "available")
-			.map((item) => ({ path: item.path, content: item.content })),
-		fileMetadata: results.map((item) => ({
-			path: item.path,
-			state: item.state,
-			...(item.state === "available" && "lineCount" in item ? { lineCount: item.lineCount } : {}),
-			...(item.state === "unreadable" && "reason" in item ? { reason: item.reason } : {}),
-		})),
-	};
-}
-
-async function collectReviewFileDiffs(
-	pi: ExtensionAPI,
-	target: ReviewTarget,
-	vcs: "git" | "jj",
-	plan: ReturnType<typeof assessReviewPlan>,
-): Promise<Array<{ path: string; diff: string }>> {
-	const gitMergeBase = vcs === "git" && target.type === "baseBranch"
-		? await getMergeBase(pi, target.branch)
-		: null;
-	const jjMergeBaseRevset = vcs === "jj" && target.type === "baseBranch"
-		? `heads(::@ & ::${target.branch})`
-		: null;
-	const results = await Promise.all(plan.includedEntries.map(async (entry) => {
-		const commands: Array<{ binary: "git" | "jj"; args: string[] }> = [];
-		if (vcs === "jj") {
-			switch (target.type) {
-				case "uncommitted":
-					commands.push({ binary: "jj", args: ["diff", "--git", "--", entry.path] });
-					break;
-				case "baseBranch":
-					commands.push({ binary: "jj", args: ["diff", "--git", "--from", jjMergeBaseRevset ?? target.branch, "--to", "@", "--", entry.path] });
-					break;
-				case "commit":
-					commands.push({ binary: "jj", args: ["--ignore-working-copy", "diff", "--git", "-r", target.sha, "--", entry.path] });
-					break;
-			}
-		} else {
-			switch (target.type) {
-				case "uncommitted":
-					commands.push(
-						{ binary: "git", args: ["diff", "--", entry.path] },
-						{ binary: "git", args: ["diff", "--staged", "--", entry.path] },
-					);
-					break;
-				case "baseBranch":
-					commands.push({ binary: "git", args: ["diff", gitMergeBase ?? `${target.branch}...HEAD`, "--", entry.path] });
-					break;
-				case "commit":
-					commands.push({ binary: "git", args: ["show", target.sha, "--", entry.path] });
-					break;
-			}
-		}
-		const outputs = await Promise.all(commands.map((command) => pi.exec(command.binary, command.args)));
-		const diff = outputs
-			.map((output) => (output.code === 0 ? (output.stdout.trim() || output.stderr.trim()) : ""))
-			.filter((text) => text)
-			.join("\n\n");
-		if (!diff) return null;
-		return { path: entry.path, diff: clipReviewFileDiff(diff) };
-	}));
-	return results.filter((item): item is { path: string; diff: string } => Boolean(item));
-}
-
-async function buildSharedReviewContext(
-	pi: ExtensionAPI,
-	ctx: ExtensionContext,
-	target: ReviewTarget,
-	vcs: "git" | "jj",
-	plan: ReturnType<typeof assessReviewPlan>,
-): Promise<ReviewContext | null> {
-	const snapshot = await collectReviewSnapshot(pi, target, vcs);
-	if (!snapshot) return null;
-	const fileArtifacts = await collectReviewFileArtifacts(ctx, plan);
-	return buildReviewContext({
-		diffSnapshot: snapshot,
-		files: fileArtifacts.files,
-		fileDiffs: await collectReviewFileDiffs(pi, target, vcs, plan),
-		fileMetadata: fileArtifacts.fileMetadata,
-	});
-}
-
-function appendReviewSections(
-	basePrompt: string,
-	strategyPrompt: string,
-	rereviewPrompt: string,
-): string {
-	return `${basePrompt}\n\n${strategyPrompt}${rereviewPrompt ? `\n\n${rereviewPrompt}` : ""}`;
-}
-
-async function buildReviewPrompt(
-	pi: ExtensionAPI,
-	ctx: ExtensionContext,
-	target: ReviewTarget,
-	previousReviewMemory: ReviewMemory | null = null,
-): Promise<string> {
-	const vcs = await detectVCS(pi);
-	const targetLabel = getTargetLabel(target, vcs);
-	const plan = assessReviewPlan(await collectReviewEntries(pi, target, vcs));
-	const sharedReviewContext = await buildSharedReviewContext(pi, ctx, target, vcs, plan).catch((error) => {
-		if (ctx.hasUI) {
-			ctx.ui.notify(`共享 review context 构建失败：${error instanceof Error ? error.message : String(error)}`, "warning");
-		}
-		return null;
-	});
-	currentReviewContext = sharedReviewContext ?? undefined;
-	const strategyPrompt = buildReviewStrategyPrompt({ plan, targetLabel, vcs });
-	const rereviewPrompt = buildRereviewPromptSection(previousReviewMemory);
-	const languagePrompt = buildReviewLanguageInstructionFromUserTexts(extractUserTextsFromEntries(ctx.sessionManager.getBranch()));
-	const contextPrompt = sharedReviewContext
-		? `## Shared review context\nThe Pi review plugin has prepared shared diff context. Use the read-only \`${REVIEW_CONTEXT_TOOL_NAME}\` tool to inspect changed files, per-file diffs, hunks, metadata, searches, and excerpts on demand instead of asking for the whole diff in the prompt. Start with \`${REVIEW_CONTEXT_TOOL_NAME}({ kind: "list-files" })\` and fetch only the files/hunks needed for each finding.`
-		: "";
-
-	if (vcs === "jj") {
-		switch (target.type) {
-			case "uncommitted":
-				return appendReviewSections(
-					["Review the current code changes. Use `jj status` and `jj diff` to inspect the diff, then provide prioritized findings.", languagePrompt, contextPrompt].filter(Boolean).join("\n\n"),
-					strategyPrompt,
-					rereviewPrompt,
-				);
-			case "baseBranch": {
-				const ref = sanitizePromptInput(target.branch);
-				const mergeBaseRevset = `heads(::@ & ::${target.branch})`;
-				return appendReviewSections(
-					[`Review the code changes relative to '${ref}'. First run \`jj log -r '${mergeBaseRevset}' --no-graph\` to confirm the common ancestor, then run \`jj diff --from '${mergeBaseRevset}' --to @\` to inspect changes relative to that ancestor. Provide prioritized actionable findings.`, languagePrompt, contextPrompt].filter(Boolean).join("\n\n"),
-					strategyPrompt,
-					rereviewPrompt,
-				);
-			}
-			case "commit": {
-				const short = target.sha.slice(0, 8);
-				const title = target.title ? ` ("${sanitizePromptInput(target.title)}")` : "";
-				return appendReviewSections(
-					[`Review the code changes introduced by change ${short}${title}. Run \`jj --ignore-working-copy diff -r ${target.sha}\` to inspect the diff, then provide prioritized actionable findings.`, languagePrompt, contextPrompt].filter(Boolean).join("\n\n"),
-					strategyPrompt,
-					rereviewPrompt,
-				);
-			}
-		}
+	if (quote) {
+		return { ok: false, error: `未闭合的引号 (${quote})` };
 	}
+	if (current) tokens.push(current);
+	return { ok: true, tokens };
+}
 
-	switch (target.type) {
+type ParsedArgs = {
+	subcommand: string | null;
+	rest: string[];
+	extra: string | null;
+	error: string | null;
+};
+
+function parseArgs(args: string | undefined): ParsedArgs {
+	const trimmed = args?.trim() ?? "";
+	if (!trimmed) return { subcommand: null, rest: [], extra: null, error: null };
+	const tokenizeResult = tokenizeArgs(trimmed);
+	if (!tokenizeResult.ok) {
+		return { subcommand: null, rest: [], extra: null, error: tokenizeResult.error };
+	}
+	const tokens = tokenizeResult.tokens;
+	const positional: string[] = [];
+	let extra: string | null = null;
+	for (let i = 0; i < tokens.length; i++) {
+		const token = tokens[i] ?? "";
+		if (token === "--extra") {
+			const next = tokens[i + 1];
+			if (!next) return { subcommand: null, rest: [], extra: null, error: "--extra 缺少参数" };
+			extra = next;
+			i += 1;
+			continue;
+		}
+		if (token.startsWith("--extra=")) {
+			extra = token.slice("--extra=".length);
+			continue;
+		}
+		positional.push(token);
+	}
+	const [subcommand, ...rest] = positional;
+	return { subcommand: subcommand?.toLowerCase() ?? null, rest, extra, error: null };
+}
+
+// ─── 审查目标解析 ────────────────────────────────────────────────────────────
+
+async function resolveTargetFromArgs(
+	pi: ExtensionAPI,
+	parsed: ParsedArgs,
+	ctx: ExtensionCommandContext,
+): Promise<ReviewTarget | null> {
+	const sub = parsed.subcommand;
+	if (!sub) return resolveTargetInteractive(pi, ctx);
+
+	switch (sub) {
 		case "uncommitted":
-			return appendReviewSections(
-				["Review the current code changes, including staged, unstaged, and untracked files. Use `git status --porcelain`, `git diff`, and `git diff --staged` to inspect the diff, then provide prioritized findings.", languagePrompt, contextPrompt].filter(Boolean).join("\n\n"),
-				strategyPrompt,
-				rereviewPrompt,
-			);
-		case "baseBranch": {
-			const branch = sanitizePromptInput(target.branch);
-			const mergeBase = await getMergeBase(pi, target.branch);
-			const basePrompt = mergeBase
-				? `Review the code changes relative to base branch '${branch}'. The merge-base commit for this comparison is ${mergeBase}. Run \`git diff ${mergeBase}\` to inspect changes relative to ${branch}, then provide prioritized actionable findings.`
-				: `Review the code changes relative to base branch '${branch}'. First run \`git merge-base HEAD ${branch}\` to find the merge base, then run \`git diff <merge-base>\` to inspect the diff. Provide prioritized actionable findings.`;
-			return appendReviewSections(
-				[basePrompt, languagePrompt, contextPrompt].filter(Boolean).join("\n\n"),
-				strategyPrompt,
-				rereviewPrompt,
-			);
-		}
-		case "commit": {
-			const short = target.sha.slice(0, 8);
-			const title = target.title ? ` ("${sanitizePromptInput(target.title)}")` : "";
-			return appendReviewSections(
-				[`Review the code changes introduced by commit ${short}${title}. Run \`git show ${target.sha}\` to inspect the diff, then provide prioritized actionable findings.`, languagePrompt, contextPrompt].filter(Boolean).join("\n\n"),
-				strategyPrompt,
-				rereviewPrompt,
-			);
-		}
-	}
-}
+			return { type: "uncommitted" };
 
-function getTargetLabel(target: ReviewTarget, vcs: "git" | "jj"): string {
-	switch (target.type) {
-		case "uncommitted":
-			return "当前未提交改动";
-		case "baseBranch":
-			return `相对 '${target.branch}' 的改动`;
-		case "commit": {
-			const short = target.sha.slice(0, 7);
-			const prefix = vcs === "jj" ? "change" : "commit";
-			return target.title ? `${prefix} ${short}: ${target.title}` : `${prefix} ${short}`;
-		}
-	}
-}
-
-function formatElapsed(startedAtMs: number, nowMs = Date.now()): string {
-	const elapsedSeconds = Math.max(0, Math.floor((nowMs - startedAtMs) / 1000));
-	const minutes = Math.floor(elapsedSeconds / 60);
-	const seconds = elapsedSeconds % 60;
-	return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
-}
-
-export default function reviewExtension(pi: ExtensionAPI): void {
-	pi.registerTool(makeVisibleReviewContextTool());
-	let latestReviewWidgetCtx: ExtensionContext | undefined;
-	const reviewWidgetRuntime = claimReviewWidgetRuntime();
-
-	function stopReviewWidgetTimer(): void {
-		reviewWidgetRuntime.clearTimer();
-	}
-
-	function renderReviewWidget(ctx: ExtensionContext): boolean {
-		if (!reviewWidgetRuntime.isCurrent() || !ctx.hasUI) return false;
-		latestReviewWidgetCtx = ctx;
-		if (!reviewOriginId) {
-			ctx.ui.setWidget("review", undefined);
-			return false;
-		}
-		const isComplete = reviewCompletedTotalMs !== undefined;
-		const nowMs = Date.now();
-		const msg = buildReviewWidgetLine({
-			targetLabel: reviewTargetLabel,
-			startedAtMs: reviewStartedAtMs ?? nowMs,
-			nowMs: isComplete ? (reviewStartedAtMs ?? 0) + reviewCompletedTotalMs! : nowMs,
-			isComplete,
-		});
-		ctx.ui.setWidget("review", (_tui, theme) => ({
-			render: (width: number) => [theme.fg("warning", msg).slice(0, width)],
-			invalidate: () => {},
-		}));
-		return true;
-	}
-
-	function refreshReviewWidget(ctx?: ExtensionContext): void {
-		if (!reviewWidgetRuntime.isCurrent()) return;
-		const targetCtx = ctx ?? latestReviewWidgetCtx;
-		if (!targetCtx?.hasUI) return;
-		const hasWidget = renderReviewWidget(targetCtx);
-		if (!hasWidget) {
-			stopReviewWidgetTimer();
-			return;
-		}
-		if (reviewWidgetRuntime.getTimer()) return;
-		reviewWidgetRuntime.setTimer(setInterval(() => {
-			if (!reviewWidgetRuntime.isCurrent() || !latestReviewWidgetCtx || !renderReviewWidget(latestReviewWidgetCtx)) {
-				stopReviewWidgetTimer();
-			}
-		}, 1000));
-	}
-
-	function clearReviewWidget(ctx: ExtensionContext): void {
-		if (!reviewWidgetRuntime.isCurrent()) return;
-		stopReviewWidgetTimer();
-		if (ctx.hasUI) ctx.ui.setWidget("review", undefined);
-	}
-
-	async function selectReviewModel(ctx: ExtensionCommandContext): Promise<Model<Api> | null> {
-		return notifyBeforePrompt("选择 review 模型：", () => (
-			selectModelForExtension(ctx, {
-				title: "选择 review 模型",
-				noModelsMessage: "当前没有可用模型，请先配置可用模型。",
-			})
-		));
-	}
-
-	async function chooseReviewModel(ctx: ExtensionCommandContext): Promise<boolean> {
-		const selectedModel = await selectReviewModel(ctx);
-		if (!selectedModel) return false;
-		if (ctx.model && selectedModel.provider === ctx.model.provider && selectedModel.id === ctx.model.id) return true;
-		preReviewModel = ctx.model ?? null;
-		const success = await pi.setModel(selectedModel);
-		if (!success) {
-			ctx.ui.notify(`无法切换到 ${selectedModel.provider}/${selectedModel.id}：模型未配置可用凭据`, "error");
-			preReviewModel = undefined;
-			return false;
-		}
-		return true;
-	}
-
-	function canNavigateTree(ctx: ExtensionContext): ctx is ExtensionCommandContext {
-		return typeof (ctx as { navigateTree?: unknown }).navigateTree === "function";
-	}
-
-	function formatReviewStatus(): string {
-		if (!reviewOriginId) return "当前没有进行中的 review";
-		const target = reviewTargetLabel ?? "未知目标";
-		if (reviewCompletedTotalMs !== undefined) {
-			return `review 已完成：${target}，耗时 ${formatElapsed(0, reviewCompletedTotalMs)}`;
-		}
-		return `review 进行中：${target}，已运行 ${formatElapsed(reviewStartedAtMs ?? Date.now())}`;
-	}
-
-	async function finishReviewSession(ctx: ExtensionContext): Promise<void> {
-		if (!reviewOriginId) {
-			ctx.ui.notify("当前没有进行中的审查", "info");
-			return;
-		}
-		const originId = reviewOriginId;
-		const navigationCtx = canNavigateTree(ctx) ? ctx : latestReviewCommandCtx;
-		reviewOriginId = undefined;
-		reviewTargetLabel = undefined;
-		reviewStartedAtMs = undefined;
-		reviewCompletedTotalMs = undefined;
-		currentReviewTargetKey = undefined;
-		currentReviewContext = undefined;
-		latestReviewCommandCtx = undefined;
-		pi.appendEntry(REVIEW_STATE_TYPE, { active: false } satisfies ReviewSessionState);
-		clearReviewWidget(ctx);
-
-		if (preReviewModel) {
-			await pi.setModel(preReviewModel);
-		}
-		preReviewModel = undefined;
-
-		if (navigationCtx && canNavigateTree(navigationCtx)) {
-			await navigationCtx.navigateTree(originId);
-		} else {
-			ctx.ui.notify("审查状态已结束。当前上下文不能自动跳转，请用 session tree 返回主 session。", "info");
-		}
-	}
-
-	async function resolveTarget(
-		args: string,
-		ctx: ExtensionCommandContext,
-	): Promise<ReviewTarget | null> {
-		const trimmed = args.trim();
-
-		if (trimmed === "uncommitted") return { type: "uncommitted" };
-
-		if (trimmed.startsWith("branch ")) {
-			const branch = trimmed.slice(7).trim();
+		case "branch": {
+			const branch = parsed.rest.join(" ").trim();
 			if (!branch) {
-				ctx.ui.notify("用法：/review branch <分支名/bookmark>", "error");
+				ctx.ui.notify("用法：/review branch <分支名称 或 jj bookmark>", "error");
 				return null;
 			}
 			return { type: "baseBranch", branch };
 		}
 
-		if (trimmed.startsWith("commit ")) {
-			const sha = trimmed.slice(7).trim();
+		case "commit": {
+			const sha = parsed.rest[0]?.trim();
 			if (!sha) {
-				ctx.ui.notify("用法：/review commit <rev>", "error");
+				ctx.ui.notify("用法：/review commit <提交 ID>", "error");
 				return null;
 			}
-			return { type: "commit", sha };
+			const title = parsed.rest.slice(1).join(" ").trim() || undefined;
+			return { type: "commit", sha, title };
 		}
 
-		if (trimmed) {
-			ctx.ui.notify("用法：/review [uncommitted | branch <name> | commit <rev>]", "error");
+		case "mr":
+		case "pr": {
+			const ref = parsed.rest[0]?.trim();
+			if (!ref) {
+				ctx.ui.notify(`用法：/review ${sub} <编号>`, "error");
+				return null;
+			}
+			const providerOverride: MrProvider = sub === "mr" ? "glab" : "gh";
+			return prepareMrTarget({
+				pi,
+				ref,
+				providerOverride,
+				onInfo: (msg) => ctx.ui.notify(msg, "info"),
+				onError: (msg) => ctx.ui.notify(msg, "error"),
+			});
+		}
+
+		default:
+			ctx.ui.notify(
+				"用法：/review [uncommitted | branch <name> | commit <rev> | mr <id> | pr <id> | status]",
+				"error",
+			);
+			return null;
+	}
+}
+
+const PRESET_LABELS = {
+	uncommitted: "当前未提交改动",
+	baseBranch: "相对某个分支的改动",
+	commit: "某个提交",
+	mergeRequest: "Merge Request / Pull Request",
+} as const;
+
+type PresetKey = keyof typeof PRESET_LABELS;
+
+async function resolveTargetInteractive(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+): Promise<ReviewTarget | null> {
+	const vcs = await detectVCS(pi);
+	const smartDefault = await getSmartDefault(pi, vcs);
+	const orderedKeys: PresetKey[] = (() => {
+		const all: PresetKey[] = ["uncommitted", "baseBranch", "commit", "mergeRequest"];
+		const fallback: Record<PresetKey, PresetKey> = {
+			uncommitted: "uncommitted",
+			baseBranch: "baseBranch",
+			commit: "commit",
+			mergeRequest: "mergeRequest",
+		};
+		const def = fallback[smartDefault as PresetKey] ?? "uncommitted";
+		return [def, ...all.filter((k) => k !== def)];
+	})();
+
+	const choice = await notifyBeforePrompt("选择审查内容：", () =>
+		ctx.ui.select("选择审查内容：", orderedKeys.map((k) => PRESET_LABELS[k])),
+	);
+	if (!choice) return null;
+
+	const key = orderedKeys.find((k) => PRESET_LABELS[k] === choice) ?? "uncommitted";
+	if (key === "uncommitted") return { type: "uncommitted" };
+	if (key === "baseBranch") return resolveBaseBranchInteractive(pi, ctx, vcs);
+	if (key === "commit") return resolveCommitInteractive(pi, ctx, vcs);
+	return resolveMrInteractive(pi, ctx);
+}
+
+async function resolveBaseBranchInteractive(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+	vcs: ReviewVcs,
+): Promise<ReviewTarget | null> {
+	if (vcs === "jj") {
+		const [allRefs, currentBookmarks] = await Promise.all([
+			getLocalBranches(pi, vcs),
+			jjCurrentBookmarks(pi),
+		]);
+		const excluded = new Set(currentBookmarks);
+		const others = allRefs.filter((b) => !excluded.has(b));
+		if (others.length === 0) {
+			ctx.ui.notify("没有其他可用 bookmark", "error");
 			return null;
 		}
-
-		const choice = await notifyBeforePrompt(
-			"选择审查内容：",
-			() => ctx.ui.select("选择审查内容：", [
-				"当前未提交改动",
-				"相对某个分支的改动",
-				"某个 commit",
-			]),
+		const branch = await notifyBeforePrompt("选择基础 bookmark：", () =>
+			ctx.ui.select("选择基础 bookmark：", others),
 		);
-		if (!choice) return null;
-
-		if (choice === "当前未提交改动") return { type: "uncommitted" };
-
-		if (choice === "相对某个分支的改动") {
-			const vcs = await detectVCS(pi);
-			if (vcs === "jj") {
-				const [allRefs, currentBookmarks] = await Promise.all([
-					getLocalBranches(pi),
-					jjCurrentBookmarks(pi),
-				]);
-				const excluded = new Set(currentBookmarks);
-				const others = allRefs.filter((branch) => !excluded.has(branch));
-				if (others.length === 0) {
-					ctx.ui.notify("没有其他可用分支/bookmark", "error");
-					return null;
-				}
-				const branch = await notifyBeforePrompt("选择基础分支：", () => ctx.ui.select("选择基础分支：", others));
-				if (!branch) return null;
-				return { type: "baseBranch", branch };
-			}
-
-			const [allRefs, currentRef] = await Promise.all([
-				getLocalBranches(pi),
-				getCurrentBranch(pi),
-			]);
-			const others = allRefs.filter((branch) => branch !== currentRef);
-			if (others.length === 0) {
-				ctx.ui.notify("没有其他可用分支/bookmark", "error");
-				return null;
-			}
-			const branch = await notifyBeforePrompt("选择基础分支：", () => ctx.ui.select("选择基础分支：", others));
-			if (!branch) return null;
-			return { type: "baseBranch", branch };
-		}
-
-		if (choice === "某个 commit") {
-			const commits = await getRecentCommits(pi);
-			if (commits.length === 0) {
-				ctx.ui.notify("没有找到记录", "error");
-				return null;
-			}
-			const commitChoice = await notifyBeforePrompt(
-				"选择：",
-				() => ctx.ui.select(
-					"选择：",
-					commits.map((commit) => `${commit.sha.slice(0, 7)}  ${commit.title}`),
-				),
-			);
-			if (!commitChoice) return null;
-			const sha = commitChoice.trim().split(/\s+/)[0] ?? "";
-			const commit = commits.find((item) => item.sha.startsWith(sha));
-			return { type: "commit", sha: commit?.sha ?? sha, title: commit?.title };
-		}
-
+		if (!branch) return null;
+		return { type: "baseBranch", branch };
+	}
+	const [allRefs, current] = await Promise.all([
+		getLocalBranches(pi, vcs),
+		getCurrentBranch(pi, vcs),
+	]);
+	const others = allRefs.filter((b) => b !== current);
+	if (others.length === 0) {
+		ctx.ui.notify("没有其他可用分支", "error");
 		return null;
+	}
+	const branch = await notifyBeforePrompt("选择基础分支：", () =>
+		ctx.ui.select("选择基础分支：", others),
+	);
+	if (!branch) return null;
+	return { type: "baseBranch", branch };
+}
+
+async function resolveCommitInteractive(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+	vcs: ReviewVcs,
+): Promise<ReviewTarget | null> {
+	const commits = await getRecentCommits(pi, vcs);
+	if (commits.length === 0) {
+		ctx.ui.notify("没有找到记录", "error");
+		return null;
+	}
+	const labels = commits.map((c) => `${c.sha.slice(0, 7)}  ${c.title}`);
+	const pick = await notifyBeforePrompt("选择提交 / jj change：", () =>
+		ctx.ui.select("选择提交 / jj change：", labels),
+	);
+	if (!pick) return null;
+	const shortSha = pick.trim().split(/\s+/)[0] ?? "";
+	const commit = commits.find((c) => c.sha.startsWith(shortSha));
+	return { type: "commit", sha: commit?.sha ?? shortSha, title: commit?.title };
+}
+
+async function resolveMrInteractive(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+): Promise<ReviewTarget | null> {
+	const ref = await notifyBeforePrompt(
+		"输入 MR/PR 编号：",
+		() => ctx.ui.editor("输入当前仓库中的 MR/PR 数字编号（例如 123）：", ""),
+	);
+	if (!ref?.trim()) return null;
+	return prepareMrTarget({
+		pi,
+		ref: ref.trim(),
+		onInfo: (msg) => ctx.ui.notify(msg, "info"),
+		onError: (msg) => ctx.ui.notify(msg, "error"),
+	});
+}
+
+// ─── 状态栏 ──────────────────────────────────────────────────────────────────
+
+function setReviewWidget(ctx: ExtensionContext, label: string | undefined, isComplete: boolean): void {
+	if (!ctx.hasUI) return;
+	if (!label) {
+		ctx.ui.setWidget("review", undefined);
+		return;
+	}
+	const status = isComplete ? "📋 审查完成" : "📋 审查进行中";
+	const message = `${status} · ${label}`;
+	ctx.ui.setWidget("review", (_tui, theme) => ({
+		render: (width: number) => [theme.fg("warning", message).slice(0, width)],
+		invalidate: () => {},
+	}));
+}
+
+function setReviewProgress(ctx: ExtensionContext, label: string, message: string): void {
+	if (!ctx.hasUI) return;
+	const text = `📋 ${message} · ${label}`;
+	ctx.ui.setStatus("review", message);
+	ctx.ui.setWidget("review", (_tui, theme) => ({
+		render: (width: number) => [theme.fg("accent", text).slice(0, width)],
+		invalidate: () => {},
+	}));
+}
+
+function clearReviewProgress(ctx: ExtensionContext): void {
+	if (!ctx.hasUI) return;
+	ctx.ui.setStatus("review", undefined);
+}
+
+function clearReviewWidget(ctx: ExtensionContext): void {
+	if (!ctx.hasUI) return;
+	ctx.ui.setWidget("review", undefined);
+	clearReviewProgress(ctx);
+}
+
+// ─── 辅助函数 ────────────────────────────────────────────────────────────────
+
+function formatElapsed(startedAtMs: number, nowMs = Date.now()): string {
+	const seconds = Math.max(0, Math.floor((nowMs - startedAtMs) / 1000));
+	const minutes = Math.floor(seconds / 60);
+	const remainder = seconds % 60;
+	return minutes > 0 ? `${minutes}m ${remainder}s` : `${remainder}s`;
+}
+
+function formatReviewStatus(): string {
+	if (!currentSession) return "当前没有进行中的 review";
+	const target = currentSession.targetLabel;
+	if (currentSession.completedTotalMs !== undefined) {
+		return `review 已完成：${target}，耗时 ${formatElapsed(0, currentSession.completedTotalMs)}`;
+	}
+	return `review 进行中：${target}，已运行 ${formatElapsed(currentSession.startedAtMs)}`;
+}
+
+// ─── 扩展入口 ────────────────────────────────────────────────────────────────
+
+export default function reviewExtension(pi: ExtensionAPI): void {
+	async function selectReviewModel(ctx: ExtensionCommandContext): Promise<Model<Api> | null> {
+		return notifyBeforePrompt("选择审查模型：", () =>
+			selectModelForExtension(ctx, {
+				title: "选择审查模型",
+				noModelsMessage: "当前没有可用模型，请先配置可用模型。",
+			}),
+		);
+	}
+
+	/**
+	 * 仅实际执行模型切换（在调用者确信要启动审查之后用）。
+	 * 返回跳转前的模型以供 /end-review 还原：
+	 *   - undefined：选中的与当前一致，未产生切换，有还原
+	 *   - null：原本无模型，已切过来（还原时 setModel(null) 会被跳过）
+	 *   - Model：原模型，/end-review 时调 setModel 还原
+	 * 返回中的 ok=false 表示切换本身失败。
+	 */
+	async function applyReviewModel(
+		ctx: ExtensionCommandContext,
+		selected: Model<Api>,
+	): Promise<{ ok: true; preReviewModel: Model<Api> | null | undefined } | { ok: false }> {
+		if (ctx.model && selected.provider === ctx.model.provider && selected.id === ctx.model.id) {
+			return { ok: true, preReviewModel: undefined };
+		}
+		const pre: Model<Api> | null = ctx.model ?? null;
+		const success = await pi.setModel(selected);
+		if (!success) {
+			ctx.ui.notify(`无法切换到 ${selected.provider}/${selected.id}：模型未配置可用凭据`, "error");
+			return { ok: false };
+		}
+		return { ok: true, preReviewModel: pre };
+	}
+
+	function persistState(snapshot: ReviewSessionState): void {
+		pi.appendEntry(REVIEW_STATE_TYPE, snapshot);
+	}
+
+	async function cleanupReviewWorktree(ctx: ExtensionContext, worktree: ReviewWorktree | undefined): Promise<void> {
+		if (!worktree) return;
+		const errors = await cleanupMrWorktree(pi, worktree);
+		if (errors.length > 0 && ctx.hasUI) {
+			ctx.ui.notify(`临时 worktree 清理失败：${errors[0]}`, "warning");
+		}
+	}
+
+	async function navigateBackAfterFailedStart(ctx: ExtensionCommandContext, originId: string | undefined): Promise<void> {
+		if (!originId) return;
+		try {
+			await ctx.navigateTree(originId, { summarize: false });
+		} catch (error) {
+			ctx.ui.notify(
+				`审查启动失败，且自动返回原会话位置失败：${error instanceof Error ? error.message : String(error)}`,
+				"warning",
+			);
+		}
 	}
 
 	async function startReviewSession(
 		ctx: ExtensionCommandContext,
 		target: ReviewTarget,
+		extraInstruction: string | null,
 	): Promise<void> {
-		if (reviewOriginId) {
-			ctx.ui.notify("已有 review 进行中。用 /review status 查看进度，或用 /review off 结束当前审查。", "warning");
-			return;
-		}
-		latestReviewCommandCtx = ctx;
-		const entries = ctx.sessionManager.getBranch();
-		const modelSelected = await chooseReviewModel(ctx);
-		if (!modelSelected) {
-			latestReviewCommandCtx = undefined;
+		if (currentSession) {
+			ctx.ui.notify(
+				"已有 review 进行中。用 /review status 查看进度，或用 /end-review 结束当前审查。",
+				"warning",
+			);
 			return;
 		}
 
-		reviewOriginId = entries.length > 0 ? entries[entries.length - 1].id : undefined;
+		// 用 getBranch() 而非 getEntries()：前者是当前活动分支的线性路径（不含其它并存分支），
+		// 后者是整棵会话树的所有节点，可能返回别的分支上的陈旧用户消息。
+		const branchEntries = ctx.sessionManager.getBranch();
+
+		// 可取消 且 无副作用：选择模型（仅选择，不 setModel）。
+		const selectedModel = await selectReviewModel(ctx);
+		if (!selectedModel) return;
+
 		const vcs = await detectVCS(pi);
-		const label = getTargetLabel(target, vcs);
-		const targetKey = buildReviewTargetKey(vcs, target);
-		const previousReviewMemory = getPreviousReviewMemory(entries, targetKey);
-		reviewTargetLabel = label;
-		reviewStartedAtMs = Date.now();
-		currentReviewTargetKey = targetKey;
+		// gh/glab 信息获取配合 git worktree；MR/PR 的 diff 提示强制走 git，
+		// 避免 jj 仓库里生成错误的 `jj diff` 命令。
+		const promptVcs: ReviewVcs = target.type === "mergeRequest" ? "git" : vcs;
+		const targetLabel = getTargetLabel(target, vcs);
+		const startedAtMs = Date.now();
+		let reviewTarget = target;
+		let reviewWorktree: ReviewWorktree | undefined;
 
-		pi.appendEntry(REVIEW_STATE_TYPE, {
-			active: true,
-			originId: reviewOriginId,
-			targetLabel: reviewTargetLabel,
-			startedAtMs: reviewStartedAtMs,
-			completedTotalMs: undefined,
-			targetKey: currentReviewTargetKey,
-		} satisfies ReviewSessionState);
+		// 记录返回点：当前叶节点。分叉后会从首条用户消息处创建兄弟分支，
+		// /end-review 时 navigateTree 回原叶节点，把审查分支总结成一条提示
+		// 插入主分支。
+		const originId = ctx.sessionManager.getLeafId() ?? undefined;
 
-		refreshReviewWidget(ctx);
+		// 副作用 1 / 3：若为 MR 目标，创建临时 worktree。不会切换当前仓库分支。
+		// 顺序上放在模型选择后：避免用户选模型时取消，却已创建临时目录。
+		if (target.type === "mergeRequest") {
+			const worktree = await createMrWorktree({
+				pi,
+				target,
+				onInfo: (msg) => ctx.ui.notify(msg, "info"),
+				onError: (msg) => ctx.ui.notify(msg, "error"),
+			});
+			if (!worktree) return;
+			reviewWorktree = worktree;
+			reviewTarget = { ...target, worktreePath: worktree.path, worktreeRef: worktree.ref };
+		}
 
-		const prompt = await buildReviewPrompt(pi, ctx, target, previousReviewMemory);
-		pi.sendMessage(
-			{
-				customType: "review-start",
-				content: `开始审查：${label}\n\n${prompt}`,
-				display: true,
-			},
-			{ triggerTurn: true },
+		// 副作用 2 / 3：查找首条用户消息作为分叉错位点。Mitsuhiko 式“全新分叉”：
+		// navigateTree 到首条用户消息后，叶节点进到其父节点（null 或 system
+		// 消息之后），下一条 sendUserMessage 作为首条用户消息的兄弟产生，
+		// 形成与主对话并列的干净审查分支。
+		//
+		// 取消 / 报错都在创建临时 worktree 之后发生；这里显式清理临时资源。
+		const firstUserMessage = branchEntries.find(
+			(e) => e.type === "message" && e.message.role === "user",
 		);
+		if (firstUserMessage) {
+			try {
+				const result = await ctx.navigateTree(firstUserMessage.id, {
+					summarize: false,
+					label: "code-review",
+				});
+				if (result.cancelled) {
+					await cleanupReviewWorktree(ctx, reviewWorktree);
+					ctx.ui.notify("审查启动取消。", "info");
+					return;
+				}
+			} catch (error) {
+				await cleanupReviewWorktree(ctx, reviewWorktree);
+				ctx.ui.notify(
+					`创建审查分支失败：${error instanceof Error ? error.message : String(error)}`,
+					"error",
+				);
+				return;
+			}
+			// navigateTree 到用户消息后，输入框会被回填该消息文本，
+			// 这里清掉避免干扰接下来的 sendUserMessage。
+			if (ctx.hasUI) ctx.ui.setEditorText("");
+		}
+		// 若会话尚无用户消息（刚创建），不 navigateTree，直接把当前分支当作
+		// 审查分支使用。
+
+		// 副作用 3 / 3：切换到审查模型。放在最后一步：任何上面的取消 / 失败
+		// 都不会遗留 “模型已切但审查未启动” 的孤儿状态。
+		const applyResult = await applyReviewModel(ctx, selectedModel);
+		if (!applyResult.ok) {
+			await cleanupReviewWorktree(ctx, reviewWorktree);
+			await navigateBackAfterFailedStart(ctx, originId);
+			return;
+		}
+
+		currentSession = {
+			originId,
+			targetLabel,
+			startedAtMs,
+			completedTotalMs: undefined,
+			preReviewModel: applyResult.preReviewModel,
+			worktree: reviewWorktree,
+		};
+
+		persistState({
+			active: true,
+			originId,
+			targetLabel,
+			startedAtMs,
+			worktreePath: reviewWorktree?.path,
+			worktreeRef: reviewWorktree?.ref,
+		});
+
+		setReviewWidget(ctx, targetLabel, false);
+
+		try {
+			const mergeBase = reviewTarget.type === "baseBranch"
+				? await getMergeBase(pi, promptVcs, reviewTarget.branch)
+				: null;
+
+			const projectGuidelines = await loadProjectReviewGuidelines(ctx.cwd);
+
+			const prompt = buildReviewPrompt({
+				target: reviewTarget,
+				vcs: promptVcs,
+				mergeBase,
+				projectGuidelines,
+				extraInstruction,
+			});
+
+			ctx.ui.notify(`开始审查：${targetLabel}`, "info");
+			pi.sendUserMessage(prompt);
+		} catch (error) {
+			// session 已进入进行中状态（currentSession 已赋値、worktree 已创建、模型已切换），
+			// 任何后续失败（如 loadProjectReviewGuidelines EACCES）必须回滚全部副作用，
+			// 否则 session 永远卡在“进行中”且无法通过 /end-review 恢复。
+			ctx.ui.notify(
+				`审查启动失败：${error instanceof Error ? error.message : String(error)}`,
+				"error",
+			);
+			await finalizeReviewState(ctx);
+		}
 	}
+
+	// ─── /end-review 结束审查 ────────────────────────────────────────────
+
+	type EndReviewAction = "returnOnly" | "returnAndSummarize" | "returnAndFix";
+
+	async function navigateBack(
+		ctx: ExtensionCommandContext,
+		originId: string,
+		summarize: boolean,
+	): Promise<{ ok: boolean; cancelled: boolean }> {
+		try {
+			const result = await ctx.navigateTree(originId, summarize ? {
+				summarize: true,
+				customInstructions: REVIEW_SUMMARY_PROMPT,
+				replaceInstructions: true,
+				label: "code-review",
+			} : { summarize: false });
+			return { ok: !result.cancelled, cancelled: result.cancelled };
+		} catch (error) {
+			ctx.ui.notify(
+				`返回失败：${error instanceof Error ? error.message : String(error)}`,
+				"error",
+			);
+			return { ok: false, cancelled: false };
+		}
+	}
+
+	async function executeEndReview(
+		ctx: ExtensionCommandContext,
+		action: EndReviewAction,
+	): Promise<void> {
+		if (!currentSession) {
+			ctx.ui.notify("当前没有进行中的审查", "info");
+			return;
+		}
+		if (!currentSession.originId) {
+			// 没有返回点，仅清理状态
+			await finalizeReviewState(ctx);
+			ctx.ui.notify("审查状态已清理（没有可返回的位置）。", "info");
+			return;
+		}
+
+		const session = currentSession;
+		const originId = session.originId;
+		if (!originId) return;
+		const summarize = action !== "returnOnly";
+		const progressMessage = action === "returnOnly"
+			? "正在返回主会话"
+			: action === "returnAndSummarize"
+				? "正在总结审查分支并返回主会话"
+				: "正在总结审查分支，随后自动触发修复";
+		ctx.ui.notify(`${progressMessage}，请稍候...`, "info");
+		setReviewProgress(ctx, session.targetLabel, progressMessage);
+
+		const result = await navigateBack(ctx, originId, summarize);
+		if (!result.ok) {
+			clearReviewProgress(ctx);
+			if (currentSession) {
+				setReviewWidget(ctx, currentSession.targetLabel, currentSession.completedTotalMs !== undefined);
+			}
+			if (result.cancelled) {
+				ctx.ui.notify("已取消。再次运行 /end-review 可重试。", "info");
+			}
+			return;
+		}
+
+		await finalizeReviewState(ctx);
+
+		switch (action) {
+			case "returnOnly":
+				ctx.ui.notify("审查结束，已返回主会话（未保留审查内容）。", "info");
+				return;
+			case "returnAndSummarize":
+				ctx.ui.notify("审查结束，已返回并注入结构化交接。", "info");
+				return;
+			case "returnAndFix":
+				pi.sendUserMessage(REVIEW_FIX_FINDINGS_PROMPT, { deliverAs: "followUp" });
+				ctx.ui.notify("审查结束，已返回并自动触发修复。", "info");
+				return;
+		}
+	}
+
+	async function finalizeReviewState(ctx: ExtensionContext): Promise<void> {
+		const session = currentSession;
+		currentSession = undefined;
+		clearReviewWidget(ctx);
+		persistState({ active: false });
+		await cleanupReviewWorktree(ctx, session?.worktree);
+		if (session?.preReviewModel) {
+			await pi.setModel(session.preReviewModel);
+		}
+	}
+
+	async function runEndReview(ctx: ExtensionCommandContext): Promise<void> {
+		if (!currentSession) {
+			ctx.ui.notify("当前没有进行中的审查", "info");
+			return;
+		}
+		if (!ctx.hasUI) {
+			// 非交互模式：默认仅返回
+			await executeEndReview(ctx, "returnOnly");
+			return;
+		}
+		const choice = await notifyBeforePrompt("结束审查：", () =>
+			ctx.ui.select("结束审查：", [
+				"仅返回",
+				"返回并总结",
+				"返回并修复",
+			]),
+		);
+		if (!choice) {
+			ctx.ui.notify("已取消。再次运行 /end-review 可重试。", "info");
+			return;
+		}
+		const action: EndReviewAction = choice === "返回并修复"
+			? "returnAndFix"
+			: choice === "返回并总结"
+				? "returnAndSummarize"
+				: "returnOnly";
+		await executeEndReview(ctx, action);
+	}
+
+	// ─── 命令注册 ──────────────────────────────────────────────────────
 
 	pi.registerCommand("review", {
 		description: REVIEW_COMMAND_DESCRIPTION,
 		handler: async (args, ctx) => {
-			const trimmedArgs = (args ?? "").trim();
-			if (/^off$/i.test(trimmedArgs)) {
-				await finishReviewSession(ctx);
-				return;
-			}
-			if (/^status$/i.test(trimmedArgs)) {
-				ctx.ui.notify(formatReviewStatus(), reviewOriginId ? "info" : "warning");
+			const parsed = parseArgs(args);
+			if (parsed.error) {
+				ctx.ui.notify(parsed.error, "error");
 				return;
 			}
 
-			const target = await resolveTarget(trimmedArgs, ctx);
+			if (parsed.subcommand === "status") {
+				ctx.ui.notify(formatReviewStatus(), currentSession ? "info" : "warning");
+				return;
+			}
+
+			// 仓库前置检查：git 与 jj 都不在就不要启动昂贵的审查模型
+			const [gitCheck, jjCheck] = await Promise.all([
+				pi.exec("git", ["rev-parse", "--git-dir"]),
+				pi.exec("jj", ["--ignore-working-copy", "root"]),
+			]);
+			if (gitCheck.code !== 0 && jjCheck.code !== 0) {
+				ctx.ui.notify("当前目录不是 git / jj 仓库，无法运行审查。", "error");
+				return;
+			}
+
+			const target = await resolveTargetFromArgs(pi, parsed, ctx);
 			if (!target) return;
-			await startReviewSession(ctx, target);
+
+			const sanitizedExtra = parsed.extra ? sanitizePromptBlock(parsed.extra) || null : null;
+			await startReviewSession(ctx, target, sanitizedExtra);
 		},
 	});
 
+	pi.registerCommand("end-review", {
+		description: "结束代码审查并返回主会话。三选项：仅返回 / 返回并总结 / 返回并修复",
+		handler: async (_args, ctx) => {
+			await runEndReview(ctx);
+		},
+	});
+
+	// ─── 生命周期钩子 ────────────────────────────────────────────────────
+
 	pi.on("session_shutdown", async (_event, ctx) => {
 		clearReviewWidget(ctx);
-		currentReviewContext = undefined;
-		latestReviewCommandCtx = undefined;
-		// Restore model if review was active and model was changed
-		if (preReviewModel) {
-			await pi.setModel(preReviewModel);
+		const session = currentSession;
+		currentSession = undefined;
+		await cleanupReviewWorktree(ctx, session?.worktree);
+		persistState({ active: false });
+		if (session?.preReviewModel) {
+			await pi.setModel(session.preReviewModel);
 		}
-		preReviewModel = undefined;
 	});
 
-	pi.on("before_agent_start", async (_event, ctx) => {
-		if (!reviewOriginId) return;
-		let rubricText: string;
-		try {
-			rubricText = await buildReviewRubricText(ctx.cwd);
-		} catch (error) {
-			throw error;
-		}
-
-		return {
-			message: {
-				customType: "review-rubric",
-				content: rubricText,
-				display: false,
-			},
-		};
-	});
-
-	pi.on("agent_end", async (event, ctx) => {
-		if (!reviewOriginId || !ctx.hasUI) return;
-
-		const messages = (event.messages ?? []) as Array<{ role?: string; content?: unknown }>;
-		const lastText = extractLastAssistantText(messages);
-		const lastUserText = extractLastUserText(messages);
-		const summary = lastText ? compactReviewSummary(lastText) : null;
-		if (summary && currentReviewTargetKey && lastText) {
-			const now = Date.now();
-			const previousReviewMemory = getPreviousReviewMemory(ctx.sessionManager.getBranch(), currentReviewTargetKey);
-			const extractedFindings = extractReviewFindings(lastText);
-			const nextMemory = extractedFindings.length === 0 && previousReviewMemory
-				? {
-					...previousReviewMemory,
-					summary: previousReviewMemory.summary,
-					createdAtMs: now,
-				}
-				: mergeReviewMemory(previousReviewMemory, {
-					targetKey: currentReviewTargetKey,
-					summary,
-					createdAtMs: now,
-					reviewText: lastText,
-				});
-			const updatedMemory = lastUserText
-				? applyFindingFeedback(nextMemory, lastUserText, now)
-				: nextMemory;
-			pi.appendEntry(REVIEW_RESULT_TYPE, {
-				...updatedMemory,
-				targetLabel: reviewTargetLabel,
-			} satisfies ReviewResultState);
-		}
-
-		// Review complete — stay in fork thread. User types instructions to fix,
-		// or uses /review off to exit.
-
-		// Halt timer — only count LLM duration, not post-review idle
-		if (reviewCompletedTotalMs === undefined) {
-			reviewCompletedTotalMs = Date.now() - (reviewStartedAtMs ?? Date.now());
-			stopReviewWidgetTimer();
-			renderReviewWidget(ctx);
-			pi.appendEntry(REVIEW_STATE_TYPE, {
+	pi.on("agent_end", async (_event, ctx) => {
+		if (!currentSession || !ctx.hasUI) return;
+		// 模型跑完时记入总耗时，仅给状态栏用
+		if (currentSession.completedTotalMs === undefined) {
+			currentSession.completedTotalMs = Date.now() - currentSession.startedAtMs;
+			persistState({
 				active: true,
-				originId: reviewOriginId,
-				targetLabel: reviewTargetLabel,
-				startedAtMs: reviewStartedAtMs,
-				completedTotalMs: reviewCompletedTotalMs,
-				targetKey: currentReviewTargetKey,
-			} satisfies ReviewSessionState);
+				originId: currentSession.originId,
+				targetLabel: currentSession.targetLabel,
+				startedAtMs: currentSession.startedAtMs,
+				completedTotalMs: currentSession.completedTotalMs,
+				worktreePath: currentSession.worktree?.path,
+				worktreeRef: currentSession.worktree?.ref,
+			});
+			setReviewWidget(ctx, currentSession.targetLabel, true);
 		}
 	});
 
@@ -995,25 +827,41 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 				lastState = entry.data as ReviewSessionState;
 			}
 		}
-
-		if (lastState?.active && lastState.originId) {
-			reviewOriginId = lastState.originId;
-			reviewTargetLabel = lastState.targetLabel;
-			reviewStartedAtMs = lastState.startedAtMs ?? Date.now();
-			reviewCompletedTotalMs = lastState.completedTotalMs;
-			currentReviewTargetKey = lastState.targetKey;
-			currentReviewContext = undefined;
-			latestReviewCommandCtx = undefined;
-			refreshReviewWidget(ctx);
+		// 仅在 originId 仍能在当前会话树中找到时才复活。
+		// 避免崩溃 / 退出后状态留下但 originId 已无效，导致 navigateTree 抛错。
+		const originStillExists = lastState?.originId
+			? Boolean(ctx.sessionManager.getEntry(lastState.originId))
+			: false;
+		const worktreeStillExists = lastState?.worktreePath
+			? Boolean(await fs.stat(lastState.worktreePath).catch(() => null))
+			: true;
+		if (lastState?.active && lastState.originId && originStillExists && worktreeStillExists) {
+			currentSession = {
+				originId: lastState.originId,
+				targetLabel: lastState.targetLabel ?? "未知目标",
+				startedAtMs: lastState.startedAtMs ?? Date.now(),
+				completedTotalMs: lastState.completedTotalMs,
+				preReviewModel: undefined,
+				worktree: lastState.worktreePath && lastState.worktreeRef
+					? { path: lastState.worktreePath, ref: lastState.worktreeRef }
+					: undefined,
+			};
+			setReviewWidget(ctx, currentSession.targetLabel, currentSession.completedTotalMs !== undefined);
 		} else {
-			reviewOriginId = undefined;
-			reviewTargetLabel = undefined;
-			reviewStartedAtMs = undefined;
-			reviewCompletedTotalMs = undefined;
-			currentReviewTargetKey = undefined;
-			currentReviewContext = undefined;
-			latestReviewCommandCtx = undefined;
+			currentSession = undefined;
 			clearReviewWidget(ctx);
+			if (lastState?.active) {
+				// 孤立资源清理：worktree 已不存在或 origin 失效，best-effort 全幹掉临时资源
+				if (lastState.worktreeRef) {
+					await pi.exec("git", ["update-ref", "-d", lastState.worktreeRef]).catch(() => undefined);
+				}
+				if (lastState.worktreePath) {
+					await pi.exec("git", ["worktree", "remove", "--force", lastState.worktreePath]).catch(() => undefined);
+					await fs.rm(path.dirname(lastState.worktreePath), { recursive: true, force: true }).catch(() => undefined);
+				}
+				// 顺手写一条 inactive 状态，避免下次启动反复检查
+				pi.appendEntry(REVIEW_STATE_TYPE, { active: false } satisfies ReviewSessionState);
+			}
 		}
 	});
 }
