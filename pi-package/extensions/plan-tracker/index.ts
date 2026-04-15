@@ -19,7 +19,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { notifyBeforePrompt } from "../notify/index.js";
-import { appendPlanSteps, getTrackingExecutionOptions, replaceRemainingSteps, shouldAutoPlan, type PlanStepDraft } from "./logic.js";
+import { filterPlanTrackerContextMessages, getTrackingExecutionOptions, insertPlanStepsAfterCurrent, replaceRemainingSteps, shouldAutoPlan, type PlanStepDraft } from "./logic.js";
 import { formatElapsed, type PlanStep } from "./utils.js";
 
 export default function planTrackerExtension(pi: ExtensionAPI): void {
@@ -140,7 +140,7 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 	// ── Offer tracking mode selection ──────────────────────────────────────
 
 	type TrackingChoice = "execute" | "refine" | "ignore";
-	type ActivePlanChoice = "continue-current" | "append" | "replace-remaining" | "ignore-new";
+	type ActivePlanChoice = "continue-current" | "insert-after-current" | "replace-remaining" | "ignore-new";
 
 	/** User feedback collected during input phase, available after offerTracking returns "refine". */
 	let lastRefineFeedback = "";
@@ -178,13 +178,13 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 			"已有执行计划，怎么处理新计划？",
 			() => ctx.ui.select("已有执行计划，怎么处理新计划？", [
 				"继续当前计划",
-				"补充进当前计划（追加到尾部）",
+				"插入到当前步骤之后",
 				"替换剩余步骤",
 				"忽略新计划",
 			]),
 		);
 
-		if (choice === "补充进当前计划（追加到尾部）") return "append";
+		if (choice === "插入到当前步骤之后") return "insert-after-current";
 		if (choice === "替换剩余步骤") return "replace-remaining";
 		if (choice === "忽略新计划") return "ignore-new";
 		return "continue-current";
@@ -259,14 +259,17 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 				}
 
 				const mergedSteps =
-					activeChoice === "append"
-						? appendPlanSteps(steps, drafts)
+					activeChoice === "insert-after-current"
+						? insertPlanStepsAfterCurrent(steps, drafts)
 						: replaceRemainingSteps(steps, drafts);
 				setPlan(mergedSteps, ctx);
 
 				const remaining = getRemainingSteps();
 				const remainingList = remaining.map((step) => `${step.step}. ${step.text}`).join("\n");
-				const actionText = activeChoice === "append" ? "Plan updated by appending new steps." : "Plan updated by replacing remaining steps.";
+				const actionText =
+					activeChoice === "insert-after-current"
+						? "Plan updated by inserting new steps after current step."
+						: "Plan updated by replacing remaining steps.";
 				return {
 					content: [{ type: "text", text: `${actionText}\n\n${remainingList}` }],
 					details: { success: true, merged: true, mode: activeChoice, stepCount: mergedSteps.length },
@@ -511,11 +514,7 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 
 	pi.on("context", async (event) => {
 		return {
-			messages: event.messages.filter((message) => {
-				const msg = message as AgentMessage & { customType?: string };
-				if (msg.customType === "plan-tracker-context" && steps.length === 0) return false;
-				return true;
-			}),
+			messages: filterPlanTrackerContextMessages(event.messages as (AgentMessage & { customType?: string })[], steps.length > 0),
 		};
 	});
 

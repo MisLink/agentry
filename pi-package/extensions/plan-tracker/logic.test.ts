@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-	appendPlanSteps,
+	filterPlanTrackerContextMessages,
 	getTrackingExecutionOptions,
+	insertPlanStepsAfterCurrent,
 	replaceRemainingSteps,
 	shouldAutoPlan,
 	type AutoPlanDecisionInput,
@@ -27,6 +28,26 @@ test("allows explicit plan request even for short plan", () => {
 	const result = decide({
 		prompt: "先给我一个执行计划，再动手改代码",
 		steps: [draft("Inspect"), draft("Implement")],
+	});
+
+	assert.equal(result.allow, true);
+	assert.equal(result.reason, "explicit-request");
+});
+
+test("allows colloquial explicit plan request used in real sessions", () => {
+	const result = decide({
+		prompt: "先别急着改代码，先想想这个插件怎么做更合适，给我一个一步步的方案",
+		steps: [draft("Inspect current plugin"), draft("Propose approach")],
+	});
+
+	assert.equal(result.allow, true);
+	assert.equal(result.reason, "explicit-request");
+});
+
+test("treats first-think-then-do wording as explicit planning request", () => {
+	const result = decide({
+		prompt: "先别急着改代码，先想想这个插件怎么做更合适，我们一步步来",
+		steps: [draft("Inspect current plugin"), draft("Propose approach")],
 	});
 
 	assert.equal(result.allow, true);
@@ -57,13 +78,44 @@ test("allows auto-plan for clearly complex refactor", () => {
 	assert.equal(result.reason, "complex-task");
 });
 
-test("appendPlanSteps keeps existing progress and appends renumbered steps", () => {
-	const merged = appendPlanSteps(
+test("allows auto-plan when wording sounds small but task is clearly complex", () => {
+	const result = decide({
+		prompt: "顺手重构登录流程，拆分认证模块和中间件，补测试并验证兼容性",
+		steps: [
+			draft("Inspect auth flow", "Trace current login flow across middleware, service, and UI entrypoints."),
+			draft("Refactor auth module", "Split token validation and session refresh into separate modules and update callers."),
+			draft("Update middleware", "Adjust middleware integration points and request lifecycle handling."),
+			draft("Add coverage", "Update tests and run validation for login, refresh, and logout paths."),
+		],
+	});
+
+	assert.equal(result.allow, true);
+	assert.equal(result.reason, "complex-task");
+});
+
+test("allows complex plugin work even when prompt mentions config", () => {
+	const result = decide({
+		prompt: "能不能帮我把插件命令和配置整理一下，调整执行方式，再补测试验证",
+		steps: [
+			draft("Inspect plugin flow", "Trace current plugin command flow and identify where execution state is tracked."),
+			draft("Refine config handling", "Reshape config and command wiring so execution can stay natural without a special mode."),
+			draft("Update tests", "Add regression tests and validate the new execution path."),
+		],
+	});
+
+	assert.equal(result.allow, true);
+	assert.equal(result.reason, "complex-task");
+});
+
+test("insertPlanStepsAfterCurrent keeps current step and inserts before remaining tail", () => {
+	const merged = insertPlanStepsAfterCurrent(
 		[
 			{ step: 1, text: "Inspect", detail: "Inspect", completed: true, summary: "done" },
 			{ step: 2, text: "Implement", detail: "Implement", completed: false },
+			{ step: 3, text: "Verify", detail: "Verify", completed: false },
+			{ step: 4, text: "Document", detail: "Document", completed: false },
 		],
-		[draft("Verify"), draft("Document")],
+		[draft("Refine edge cases"), draft("Retest critical flow")],
 	);
 
 	assert.deepEqual(
@@ -71,8 +123,10 @@ test("appendPlanSteps keeps existing progress and appends renumbered steps", () 
 		[
 			{ step: 1, text: "Inspect", completed: true, summary: "done" },
 			{ step: 2, text: "Implement", completed: false, summary: undefined },
-			{ step: 3, text: "Verify", completed: false, summary: undefined },
-			{ step: 4, text: "Document", completed: false, summary: undefined },
+			{ step: 3, text: "Refine edge cases", completed: false, summary: undefined },
+			{ step: 4, text: "Retest critical flow", completed: false, summary: undefined },
+			{ step: 5, text: "Verify", completed: false, summary: undefined },
+			{ step: 6, text: "Document", completed: false, summary: undefined },
 		],
 	);
 });
@@ -100,4 +154,21 @@ test("replaceRemainingSteps keeps completed prefix and swaps unfinished tail", (
 test("tracking execution options no longer include track-only mode", () => {
 	assert.deepEqual(getTrackingExecutionOptions(false), ["逐步执行（每步暂停确认）", "一次性运行全部", "忽略"]);
 	assert.deepEqual(getTrackingExecutionOptions(true), ["逐步执行（每步暂停确认）", "一次性运行全部", "忽略"]);
+});
+
+test("filterPlanTrackerContextMessages keeps only latest plan context when active", () => {
+	const messages = [
+		{ id: "a", customType: "plan-tracker-context" },
+		{ id: "b", customType: "other" },
+		{ id: "c", customType: "plan-tracker-context" },
+	];
+
+	assert.deepEqual(
+		filterPlanTrackerContextMessages(messages, true).map((message) => message.id),
+		["b", "c"],
+	);
+	assert.deepEqual(
+		filterPlanTrackerContextMessages(messages, false).map((message) => message.id),
+		["b"],
+	);
 });

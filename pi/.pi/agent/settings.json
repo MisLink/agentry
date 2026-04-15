@@ -1,9 +1,8 @@
 {
-  "lastChangelogVersion": "0.66.1",
+  "lastChangelogVersion": "0.67.68",
   "defaultProvider": "github-copilot",
   "defaultModel": "claude-opus-4.6",
   "defaultThinkingLevel": "high",
-  "lastChangelogVersion": "0.67.3",
   "packages": [
     "~/projects/agentry",
     "git:github.com/nicobailon/pi-mcp-adapter@v2.4.0",
