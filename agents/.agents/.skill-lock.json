@@ -52,9 +52,9 @@
       "sourceType": "github",
       "sourceUrl": "https://github.com/vercel-labs/agent-browser.git",
       "skillPath": "skills/agent-browser/SKILL.md",
-      "skillFolderHash": "67d654a553c1bd21b4cff0d9d61d75cd9a67e635",
+      "skillFolderHash": "121eecacd86c0aab06aef5cd4663e80c5397cd41",
       "installedAt": "2026-03-25T17:47:43.301Z",
-      "updatedAt": "2026-04-16T02:08:17.114Z"
+      "updatedAt": "2026-04-26T15:34:38.414Z"
     },
     "find-skills": {
       "source": "vercel-labs/skills",
@@ -70,20 +70,18 @@
       "sourceType": "github",
       "sourceUrl": "https://github.com/anthropics/skills.git",
       "skillPath": "skills/claude-api/SKILL.md",
-      "skillFolderHash": "5a67769c8d12b9eb00c840ccc9e74a37d9d2a3c9",
-      "pluginName": "claude-api",
+      "skillFolderHash": "6d12d690ffa6b91119e932e448f4437d9f197a53",
       "installedAt": "2026-03-25T17:51:48.804Z",
-      "updatedAt": "2026-03-25T17:51:48.804Z"
+      "updatedAt": "2026-04-26T15:34:46.785Z"
     },
     "skill-creator": {
       "source": "anthropics/skills",
       "sourceType": "github",
       "sourceUrl": "https://github.com/anthropics/skills.git",
       "skillPath": "skills/skill-creator/SKILL.md",
-      "skillFolderHash": "98a510d1cfef9f82c3b1eec200229ca68725e613",
-      "pluginName": "example-skills",
+      "skillFolderHash": "3cf9a8db32597ba3e24b584a3d696f4e11c7d7b6",
       "installedAt": "2026-03-25T17:51:49.303Z",
-      "updatedAt": "2026-03-25T17:51:49.303Z"
+      "updatedAt": "2026-04-26T15:34:52.294Z"
     },
     "onevcat-jj": {
       "source": "onevcat/skills",
@@ -99,9 +97,9 @@
       "sourceType": "github",
       "sourceUrl": "https://github.com/shadcn/ui.git",
       "skillPath": "skills/shadcn/SKILL.md",
-      "skillFolderHash": "a7903e883aaeead6ed509468b499310729968ad9",
+      "skillFolderHash": "39a241ae2b522ccb686d4d7064ca61e68dbf3794",
       "installedAt": "2026-03-25T17:52:27.674Z",
-      "updatedAt": "2026-04-16T02:09:26.584Z"
+      "updatedAt": "2026-04-26T15:35:05.009Z"
     },
     "software-design-philosophy": {
       "source": "luoling8192/software-design-philosophy-skill",
@@ -153,9 +151,9 @@
       "sourceType": "github",
       "sourceUrl": "https://github.com/microsoft/playwright-cli.git",
       "skillPath": "skills/playwright-cli/SKILL.md",
-      "skillFolderHash": "b901dcc64256dbb1b32744975a0bafaeb4478da5",
+      "skillFolderHash": "e065db5c5c0a7b197cdbcb1e70c9b374f80a7c91",
       "installedAt": "2026-04-07T12:55:18.151Z",
-      "updatedAt": "2026-04-16T02:09:32.716Z"
+      "updatedAt": "2026-04-26T15:35:10.077Z"
     },
     "feishu-create-doc": {
       "source": "larksuite/openclaw-lark",

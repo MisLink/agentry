@@ -130,11 +130,11 @@ function assessAgentsMateriality(entries: ReviewEntry[]): AgentsMateriality {
 function describeTier(plan: ReviewPlan): string {
 	switch (plan.tier) {
 		case "trivial":
-			return "trivial — 小改动。先偏向通过，只有在问题具体且影响明确时才提。";
+			return "trivial - small change. Bias toward approval and flag only concrete issues with clear impact.";
 		case "lite":
-			return "lite — 中等改动。先做代码质量主审，再按命中文件类型补充专项检查。";
+			return "lite - medium change. Start with code-quality review, then add focused checks based on touched file types.";
 		case "full":
-			return "full — 高风险或高范围改动。按专项视角逐项检查，再汇总真正重要的问题。";
+			return "full - high-risk or broad change. Review by specialist perspective, then merge only material findings.";
 	}
 }
 
@@ -143,34 +143,34 @@ const PASS_ORDER: ReviewFocus[] = ["code-quality", "security", "performance", "r
 function describeFocus(focus: ReviewFocus): string {
 	switch (focus) {
 		case "code-quality":
-			return `### Code Quality\nWhat to flag:\n- 真实的正确性问题、状态流转错误、静默失败、错误边界错误\n- 本次 diff 引入的可维护性/可观测性退化\nWhat NOT to flag:\n- 纯风格偏好\n- 作者显然有意的局部取舍\n- 未改动代码中的既有问题`;
+			return `### Code Quality\nWhat to flag:\n- Real correctness bugs, broken state transitions, silent failures, and wrong error boundaries\n- Maintainability or observability regressions introduced by this diff\nWhat NOT to flag:\n- Pure style preferences\n- Clearly intentional local tradeoffs\n- Pre-existing issues in unchanged code`;
 		case "security":
-			return `### Security\nWhat to flag:\n- 可利用或具体危险的输入校验、认证、授权、密钥、注入问题\n- 对不受信任输入的边界处理缺失\nWhat NOT to flag:\n- 需要一串牵强前提才成立的理论风险\n- 只是“最好再加一层防御”的泛泛建议\n- 与本次改动无关的旧问题`;
+			return `### Security\nWhat to flag:\n- Exploitable or concretely dangerous input validation, authentication, authorization, secret, or injection issues\n- Missing boundary handling for untrusted input\nWhat NOT to flag:\n- Theoretical risks that require a chain of weak assumptions\n- Generic defense-in-depth suggestions without concrete impact\n- Old issues unrelated to this change`;
 		case "performance":
-			return `### Performance\nWhat to flag:\n- 明确的 N+1、热路径额外 IO、无界队列/缓存、背压缺失\n- 会让关键路径明显变慢或放大资源消耗的改动\nWhat NOT to flag:\n- 无法落到具体代码路径的“可能变慢”猜测\n- 纯微优化建议`;
+			return `### Performance\nWhat to flag:\n- Clear N+1 behavior, extra hot-path IO, unbounded queues/caches, and missing backpressure\n- Changes that materially slow critical paths or amplify resource usage\nWhat NOT to flag:\n- Vague "might be slower" guesses without a concrete code path\n- Pure micro-optimization ideas`;
 		case "release":
-			return `### Release / Dependency\nWhat to flag:\n- 依赖变更带来的兼容性、部署、迁移、权限影响\n- 破坏性操作或需要人工留意的发布风险\nWhat NOT to flag:\n- 仅有 lockfile 噪音本身\n- 与发布无关的普通实现细节`;
+			return `### Release / Dependency\nWhat to flag:\n- Compatibility, deployment, migration, or permission impact from dependency changes\n- Destructive operations or release risks that need human attention\nWhat NOT to flag:\n- Lockfile noise by itself\n- Ordinary implementation details unrelated to release risk`;
 		case "docs":
-			return `### Docs / UX Surface\nWhat to flag:\n- 本次改动改变行为但文档、注释、用户提示没有同步\n- 错误信息或交互文案会误导用户\nWhat NOT to flag:\n- 纯措辞偏好\n- 不影响理解的轻微文案问题`;
+			return `### Docs / UX Surface\nWhat to flag:\n- Behavior changes without matching updates to docs, comments, or user prompts\n- Error messages or interaction text that mislead users\nWhat NOT to flag:\n- Pure wording preferences\n- Minor copy issues that do not affect understanding`;
 		case "agents":
-			return `### AGENTS / Review Instructions\nWhat to flag:\n- 会显著改变 AI 工作流、命令、目录约定，但 AGENTS.md / REVIEW_GUIDELINES.md 未同步\nWhat NOT to flag:\n- 普通业务改动\n- 不会影响 agent 工作方式的小修小补`;
+			return `### AGENTS / Review Instructions\nWhat to flag:\n- Significant AI workflow, command, or directory convention changes not reflected in AGENTS.md or REVIEW_GUIDELINES.md\nWhat NOT to flag:\n- Ordinary product changes\n- Small edits that do not affect how agents work`;
 	}
 }
 
 function describePass(focus: ReviewFocus): ReviewPass {
 	switch (focus) {
 		case "code-quality":
-			return { id: focus, title: "Pass 1 · Code Quality", instruction: "先检查真实正确性问题、静默失败、状态流转和维护性退化。" };
+			return { id: focus, title: "Pass 1 - Code Quality", instruction: "First check real correctness issues, silent failures, state transitions, and maintainability regressions." };
 		case "security":
-			return { id: focus, title: "Pass · Security", instruction: "聚焦可利用或具体危险的输入边界、认证、授权、密钥、注入问题。" };
+			return { id: focus, title: "Pass - Security", instruction: "Focus on exploitable or concretely dangerous input-boundary, authentication, authorization, secret, and injection issues." };
 		case "performance":
-			return { id: focus, title: "Pass · Performance", instruction: "聚焦热路径、背压、无界资源增长、额外 IO 和明确性能回退。" };
+			return { id: focus, title: "Pass - Performance", instruction: "Focus on hot paths, backpressure, unbounded resource growth, extra IO, and clear performance regressions." };
 		case "release":
-			return { id: focus, title: "Pass · Release", instruction: "检查依赖、迁移、部署、兼容性和破坏性发布风险。" };
+			return { id: focus, title: "Pass - Release", instruction: "Check dependency, migration, deployment, compatibility, and destructive-release risks." };
 		case "docs":
-			return { id: focus, title: "Pass · Docs", instruction: "检查行为变化是否同步到文档、注释和用户提示。" };
+			return { id: focus, title: "Pass - Docs", instruction: "Check whether behavior changes are reflected in docs, comments, and user-facing prompts." };
 		case "agents":
-			return { id: focus, title: "Pass · AGENTS", instruction: "检查 AI 工作流/命令/目录约定变化是否同步到 AGENTS.md 或 REVIEW_GUIDELINES.md。" };
+			return { id: focus, title: "Pass - AGENTS", instruction: "Check whether AI workflow, command, or directory-convention changes are reflected in AGENTS.md or REVIEW_GUIDELINES.md." };
 		}
 }
 
@@ -187,8 +187,8 @@ export function buildMultiPassReviewPlan(plan: ReviewPlan): ReviewPass[] {
 		...activeFocuses.map((focus) => describePass(focus)),
 		{
 			id: "coordinator",
-			title: "Final Pass · Coordinator",
-			instruction: "最后统一去重、校准严重性、应用 approval bias，并给出最终 verdict。",
+			title: "Final Pass - Coordinator",
+			instruction: "Finally dedupe findings, calibrate severity, apply approval bias, and give the final verdict.",
 		},
 	];
 }
@@ -242,8 +242,8 @@ export function assessReviewPlan(entries: ReviewEntry[]): ReviewPlan {
 
 export function buildReviewStrategyPrompt(input: ReviewStrategyPromptInput): string {
 	const customGuidelines = input.customGuidelines ? sanitizePromptInput(input.customGuidelines) : null;
-	const includedPaths = input.plan.includedEntries.map((entry) => `- ${entry.path}`).join("\n") || "- （未能预先分析文件列表）";
-	const excludedPaths = input.plan.excludedEntries.map((entry) => `- ${entry.path}`).join("\n") || "- （无）";
+	const includedPaths = input.plan.includedEntries.map((entry) => `- ${entry.path}`).join("\n") || "- No changed-file list was available before review.";
+	const excludedPaths = input.plan.excludedEntries.map((entry) => `- ${entry.path}`).join("\n") || "- None";
 	const focusBlocks = input.plan.focuses.map((focus) => describeFocus(focus)).join("\n\n");
 	const passPlan = buildMultiPassReviewPlan(input.plan)
 		.map((pass, index) => `${index + 1}. ${pass.title} — ${pass.instruction}`)
@@ -251,5 +251,53 @@ export function buildReviewStrategyPrompt(input: ReviewStrategyPromptInput): str
 
 	const agentsMateriality = input.plan.agentsMateriality ?? "null";
 
-	return `## 审查策略\n\n目标：${sanitizePromptInput(input.targetLabel)}\nVCS：${input.vcs}\n风险层级：${describeTier(input.plan)}\n涉及文件：${input.plan.includedEntries.length} 个，估算变更行数 ${input.plan.totalLines}\nAGENTS 物料性：${agentsMateriality}\n\n### 范围边界\n- 只审查本次改动（changed code / diff）里真正会影响正确性、安全性、性能、发布风险或维护成本的问题。\n- 对小改动保持 bias toward approval：若只有轻微建议，倾向给出 approved_with_comments 风格结论，而不是阻塞。\n- 先忽略锁文件、压缩产物、source map、明显生成文件；但数据库迁移、schema 变更、权限变更仍要检查。\n\n### 将重点查看的文件\n${includedPaths}\n\n### 预先排除的噪音文件\n${excludedPaths}\n\n### 多阶段审查流程\n${passPlan}\n\n### 专项检查清单\n${focusBlocks}\n\n## Finding / thread ID 约定\n- 每个 finding 用稳定 ID：\`[P1][F-auth-expiry] path/to/file: headline\`。\n- 如果环境支持 comment thread / 评论线程，可额外带上 thread ID：\`[P1][F-auth-expiry][thread:T-auth-expiry] path/to/file: headline\`。\n- 后续复审或用户反馈优先引用 finding id、稳定 ID、或 \`thread:T-auth-expiry\` 这类 thread ID，而不是重复整段 finding 文本。\n- 如果作者说 \`acknowledged F-auth-expiry\`、\`won't fix F-auth-expiry\`、\`I disagree F-auth-expiry\` 或 \`I disagree thread:T-auth-expiry\`，要把它当成该 finding / reply-to-finding comment thread 的精确反馈。\n\n## 协调与去重\n- 如果多个专项命中同一问题，只保留一次，放在最合适的类别下。\n- 如果不确定严重性，先回到代码核实，不要靠猜。\n- coordinator final pass 负责汇总、去重和最终判断。\n- 先给高信号问题，再给非阻塞提示。\n\n## 决策 rubric\n- 只有 suggestion 级别建议：approved_with_comments\n- 有 warning 但无生产风险：approved_with_comments\n- 多个 warning 形成风险模式：minor_issues\n- 任一 critical 或明确生产安全风险：significant_concerns\n\n## 人工判断偏向\n- 如果只有 suggestion 级别建议，不要夸大成阻塞问题。\n- 如果改动很小且干净，可以明确写“看起来没有阻塞性问题”。\n\n## 项目附加规范\n${customGuidelines ?? "- （无）"}`;
+	return `## Review Strategy
+
+Target: ${sanitizePromptInput(input.targetLabel)}
+VCS: ${input.vcs}
+Risk tier: ${describeTier(input.plan)}
+Changed files considered: ${input.plan.includedEntries.length}; estimated changed lines: ${input.plan.totalLines}
+AGENTS materiality: ${agentsMateriality}
+
+### Scope Boundaries
+- Review only issues in the changed code or diff that materially affect correctness, security, performance, release risk, or maintainability.
+- Keep approval bias for small changes. If there are only minor suggestions, prefer a non-blocking approval outcome over blocking.
+- Ignore lockfile noise, minified outputs, source maps, and obvious generated files first; still inspect migrations, schema changes, auth changes, and permission changes.
+
+### Files To Inspect
+${includedPaths}
+
+### Noise Excluded Up Front
+${excludedPaths}
+
+### Review Pass Plan
+${passPlan}
+
+### Focus Checklists
+${focusBlocks}
+
+## Finding / Thread ID Convention
+- Give each finding a stable ID: \`[P1][F-auth-expiry] path/to/file: headline\`.
+- If the environment supports comment threads, optionally include a thread ID: \`[P1][F-auth-expiry][thread:T-auth-expiry] path/to/file: headline\`.
+- In re-reviews or user feedback, prefer finding IDs, stable IDs, or \`thread:T-auth-expiry\` references instead of repeating whole finding text.
+- Treat feedback such as \`acknowledged F-auth-expiry\`, \`won't fix F-auth-expiry\`, \`I disagree F-auth-expiry\`, or \`I disagree thread:T-auth-expiry\` as precise feedback on that finding or reply-to-finding thread.
+
+## Coordination And Dedupe
+- If multiple specialist passes identify the same issue, keep one copy in the best-fitting category.
+- If severity is uncertain, re-check the code instead of guessing.
+- The coordinator final pass dedupes findings, calibrates severity, and decides the final verdict.
+- Lead with high-signal issues, then non-blocking notes.
+
+## Verdict Rubric
+- Suggestions only: 通过，有备注.
+- Warnings without production risk: 通过，有备注.
+- Multiple warnings forming a risk pattern: 小问题.
+- Any critical issue or clear production-safety risk: 重大疑虑.
+
+## Approval Bias
+- Do not inflate suggestion-level comments into blocking issues.
+- For small clean changes, explicitly say there are no blocking issues.
+
+## Project-Specific Guidelines
+${customGuidelines ?? "- None"}`;
 }

@@ -14,7 +14,6 @@
  */
 import {
 	buildSessionContext,
-	codingTools,
 	createAgentSession,
 	createExtensionRuntime,
 	SessionManager,
@@ -197,7 +196,6 @@ export class SideSessionManager {
 			model,
 			modelRegistry: ctx.modelRegistry as AgentSession["modelRegistry"],
 			thinkingLevel,
-			tools: codingTools,
 			resourceLoader: makeBtwResourceLoader(ctx),
 		});
 

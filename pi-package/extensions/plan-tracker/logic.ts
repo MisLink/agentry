@@ -5,6 +5,17 @@ export interface PlanStepDraft {
 	detail: string;
 }
 
+export type PlanExecutionMode = "tracked" | "running";
+
+export type PlanCommand =
+	| { action: "draft"; prompt?: string }
+	| { action: "track" }
+	| { action: "run"; prompt?: string }
+	| { action: "refine"; feedback: string }
+	| { action: "done"; step: number }
+	| { action: "clear" }
+	| { action: "status" };
+
 export interface AutoPlanDecisionInput {
 	prompt: string;
 	steps: readonly PlanStepDraft[];
@@ -148,6 +159,38 @@ function materializeDraft(step: PlanStepDraft, stepNumber: number): PlanStep {
 	};
 }
 
+export function parsePlanCommand(args?: string): PlanCommand {
+	const trimmed = args?.trim() ?? "";
+	if (!trimmed) {
+		return { action: "draft" };
+	}
+
+	const [command = "", ...rest] = trimmed.split(/\s+/);
+	const payload = rest.join(" ").trim();
+	switch (command.toLowerCase()) {
+		case "track":
+			return { action: "track" };
+		case "run":
+			return payload ? { action: "run", prompt: payload } : { action: "run" };
+		case "refine":
+			return { action: "refine", feedback: payload };
+		case "done":
+			return { action: "done", step: Number.parseInt(payload, 10) };
+		case "clear":
+		case "discard":
+			return { action: "clear" };
+		case "status":
+		case "show":
+			return { action: "status" };
+		default:
+			return { action: "draft", prompt: trimmed };
+	}
+}
+
+export function shouldQueueNextStepAfterCompletion(mode: PlanExecutionMode): boolean {
+	return mode === "running";
+}
+
 export function shouldAutoPlan(input: AutoPlanDecisionInput): AutoPlanDecision {
 	const prompt = input.prompt.trim();
 	if (matchesAny(prompt, EXPLICIT_PLAN_PATTERNS)) {
@@ -211,10 +254,6 @@ export function shouldAutoPlan(input: AutoPlanDecisionInput): AutoPlanDecision {
 	}
 
 	return { allow: false, reason: "not-complex-enough", score, signals };
-}
-
-export function getTrackingExecutionOptions(_isRefine: boolean): string[] {
-	return ["逐步执行（每步暂停确认）", "一次性运行全部", "忽略"];
 }
 
 export function insertPlanStepsAfterCurrent(existingSteps: readonly PlanStep[], newSteps: readonly PlanStepDraft[]): PlanStep[] {

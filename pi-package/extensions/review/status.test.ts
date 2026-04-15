@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildReviewWidgetLine } from "./status.ts";
+import {
+	buildReviewWidgetLine,
+} from "./status.ts";
 
 test("buildReviewWidgetLine shows compact active status before heartbeat threshold", () => {
 	assert.equal(

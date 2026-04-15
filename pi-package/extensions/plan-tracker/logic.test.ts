@@ -3,10 +3,11 @@ import test from "node:test";
 
 import {
 	filterPlanTrackerContextMessages,
-	getTrackingExecutionOptions,
 	insertPlanStepsAfterCurrent,
+	parsePlanCommand,
 	replaceRemainingSteps,
 	shouldAutoPlan,
+	shouldQueueNextStepAfterCompletion,
 	type AutoPlanDecisionInput,
 	type PlanStepDraft,
 } from "./logic.ts";
@@ -151,9 +152,21 @@ test("replaceRemainingSteps keeps completed prefix and swaps unfinished tail", (
 	);
 });
 
-test("tracking execution options no longer include track-only mode", () => {
-	assert.deepEqual(getTrackingExecutionOptions(false), ["逐步执行（每步暂停确认）", "一次性运行全部", "忽略"]);
-	assert.deepEqual(getTrackingExecutionOptions(true), ["逐步执行（每步暂停确认）", "一次性运行全部", "忽略"]);
+test("parsePlanCommand separates draft, track, and run intents", () => {
+	assert.deepEqual(parsePlanCommand(""), { action: "draft" });
+	assert.deepEqual(parsePlanCommand("重构登录流程"), { action: "draft", prompt: "重构登录流程" });
+	assert.deepEqual(parsePlanCommand("track"), { action: "track" });
+	assert.deepEqual(parsePlanCommand("run"), { action: "run" });
+	assert.deepEqual(parsePlanCommand("run 重构登录流程"), { action: "run", prompt: "重构登录流程" });
+	assert.deepEqual(parsePlanCommand("refine 第二步再拆细一点"), { action: "refine", feedback: "第二步再拆细一点" });
+	assert.deepEqual(parsePlanCommand("done 2"), { action: "done", step: 2 });
+	assert.deepEqual(parsePlanCommand("clear"), { action: "clear" });
+	assert.deepEqual(parsePlanCommand("status"), { action: "status" });
+});
+
+test("completed tracked steps do not auto-queue unless plan is running", () => {
+	assert.equal(shouldQueueNextStepAfterCompletion("tracked"), false);
+	assert.equal(shouldQueueNextStepAfterCompletion("running"), true);
 });
 
 test("filterPlanTrackerContextMessages keeps only latest plan context when active", () => {
