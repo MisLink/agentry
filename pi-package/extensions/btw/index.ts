@@ -35,6 +35,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { getModelForSlot } from "../../lib/model-router.js";
 import { Key, Markdown, truncateToWidth, type OverlayHandle } from "@mariozechner/pi-tui";
+import { notifyBeforePrompt } from "../notify/index.js";
 import {
 	BtwThread,
 	BTW_ENTRY_TYPE,
@@ -593,10 +594,13 @@ export default function (pi: ExtensionAPI) {
 		dismissOverlay();
 		if (!ctx.hasUI || thread.items.length === 0) return;
 
-		const choice = await ctx.ui.select("Close BTW:", [
-			"Keep side thread",
-			"Inject summary into main chat",
-		]);
+		const choice = await notifyBeforePrompt(
+			"Close BTW:",
+			() => ctx.ui.select("Close BTW:", [
+				"Keep side thread",
+				"Inject summary into main chat",
+			]),
+		);
 		if (choice === "Inject summary into main chat") {
 			await injectSummary(ctx);
 		}
@@ -649,10 +653,13 @@ export default function (pi: ExtensionAPI) {
 
 			// ── No args: open overlay ──────────────────────────────────────────
 			if (!thread.isEmpty && ctx.hasUI) {
-				const choice = await ctx.ui.select("BTW side chat:", [
-					"Continue previous conversation",
-					"Start fresh",
-				]);
+				const choice = await notifyBeforePrompt(
+					"BTW side chat:",
+					() => ctx.ui.select("BTW side chat:", [
+						"Continue previous conversation",
+						"Start fresh",
+					]),
+				);
 				if (choice === "Start fresh") {
 					await resetThread(ctx, true);
 				} else if (choice === "Continue previous conversation") {

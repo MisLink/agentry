@@ -9,10 +9,8 @@
  * - create_plan tool: AI outputs structured plan steps directly (zero extra cost)
  * - mark_done tool: AI reports step completion with optional summary
  * - /plan <msg>: request a plan from the AI
- * - /track: manually create/edit a plan via PlanEditor TUI
  * - /todos: view current plan progress
  * - /done N: manually mark a step as complete
- * - Ctrl+Alt+P: shortcut for /track
  * - Progress widget + footer status
  * - Work log on plan completion
  */
@@ -20,6 +18,8 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { notifyBeforePrompt } from "../notify/index.js";
+import { appendPlanSteps, getTrackingExecutionOptions, replaceRemainingSteps, shouldAutoPlan, type PlanStepDraft } from "./logic.js";
 import { formatElapsed, type PlanStep } from "./utils.js";
 
 export default function planTrackerExtension(pi: ExtensionAPI): void {
@@ -28,6 +28,7 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 	let pauseOnStep = false;
 	let skipConfirmations = false;
 	let pendingRefine = false;
+	let lastUserPrompt = "";
 
 	// ── State persistence ──────────────────────────────────────────────────
 
@@ -63,15 +64,42 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 		ctx.ui.setWidget("plan-tracker", lines);
 	}
 
-	// ── Plan lifecycle ─────────────────────────────────────────────────────
+	// ── Plan helpers ───────────────────────────────────────────────────────
+
+	function getRemainingSteps(): PlanStep[] {
+		return steps.filter((step) => !step.completed);
+	}
+
+	function getCurrentStep(): PlanStep | undefined {
+		return getRemainingSteps()[0];
+	}
+
+	function setPlan(newSteps: PlanStep[], ctx: ExtensionContext): void {
+		steps = newSteps;
+		updateUI(ctx);
+		persist();
+	}
+
+	function queueExecution(step: PlanStep, feedback?: string): void {
+		let content = `Continue the plan. Execute step ${step.step}: ${step.detail}`;
+		if (feedback) {
+			content += `\n\nUser feedback for this step: ${feedback}`;
+		}
+		pi.sendMessage(
+			{
+				customType: "plan-tracker-execute",
+				content,
+				display: true,
+			},
+			{ triggerTurn: true },
+		);
+	}
 
 	function activatePlan(newSteps: PlanStep[], pause: boolean, ctx: ExtensionContext): void {
-		steps = newSteps;
 		planStartedAt = Date.now();
 		pauseOnStep = pause;
 		skipConfirmations = !pause;
-		updateUI(ctx);
-		persist();
+		setPlan(newSteps, ctx);
 	}
 
 	function clearPlan(ctx: ExtensionContext): void {
@@ -93,50 +121,73 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 		return `**${header}**\n\n${lines.join("\n")}`;
 	}
 
+	function buildPlanDrafts(inputSteps: { text: string; detail: string }[]): PlanStepDraft[] {
+		return inputSteps.map((step) => ({
+			text: step.text.slice(0, 60),
+			detail: step.detail,
+		}));
+	}
+
+	function materializePlanSteps(drafts: readonly PlanStepDraft[]): PlanStep[] {
+		return drafts.map((step, index) => ({
+			step: index + 1,
+			text: step.text.slice(0, 60),
+			detail: step.detail,
+			completed: false,
+		}));
+	}
+
 	// ── Offer tracking mode selection ──────────────────────────────────────
 
-	type TrackingChoice = "execute" | "track-only" | "refine" | "ignore";
+	type TrackingChoice = "execute" | "refine" | "ignore";
+	type ActivePlanChoice = "continue-current" | "append" | "replace-remaining" | "ignore-new";
 
-	/** User feedback collected during the input phase, available after offerTracking returns "refine". */
+	/** User feedback collected during input phase, available after offerTracking returns "refine". */
 	let lastRefineFeedback = "";
 
 	async function offerTracking(planSteps: PlanStep[], isRefine: boolean, ctx: ExtensionContext): Promise<TrackingChoice> {
-		const planList = planSteps.map((s) => `  ${s.step}. ${s.text}`).join("\n");
+		const planList = planSteps.map((step) => `  ${step.step}. ${step.text}`).join("\n");
 
-		// Step 1: Show input field for optional feedback
 		const inputPrompt = isRefine
 			? `修改后的计划（${planSteps.length} 步）：\n${planList}\n\n还要补充什么？（直接回车跳过）`
 			: `计划（${planSteps.length} 步）：\n${planList}\n\n要补充什么？（直接回车跳过）`;
-		const feedback = await ctx.ui.input(inputPrompt);
+		const feedback = await notifyBeforePrompt(inputPrompt, () => ctx.ui.input(inputPrompt));
 		if (feedback?.trim()) {
 			lastRefineFeedback = feedback.trim();
 			return "refine";
 		}
 
-		// Step 2: No feedback — pick execution mode
-		const options = isRefine
-			? ["逐步执行（每步暂停确认）", "一次性运行全部", "忽略"]
-			: ["逐步执行（每步暂停确认）", "一次性运行全部", "只追踪（手动 /done）", "忽略"];
-		const choice = await ctx.ui.select("如何执行？", options);
+		const choice = await notifyBeforePrompt("如何执行？", () => ctx.ui.select("如何执行？", getTrackingExecutionOptions(isRefine)));
 		if (!choice || choice === "忽略") return "ignore";
 
 		const pause = choice.startsWith("逐步");
-		const trackOnly = choice.startsWith("只追踪");
 		activatePlan(planSteps, pause, ctx);
 
-		if (!trackOnly) {
-			const first = steps[0];
-			pi.sendMessage(
-				{
-					customType: "plan-tracker-execute",
-					content: `Execute the plan. Start with step ${first.step}: ${first.detail}`,
-					display: true,
-				},
-				{ triggerTurn: true },
-			);
-			return "execute";
+		const first = getCurrentStep();
+		if (!first) {
+			throw new Error("Activated plan is missing its first step");
 		}
-		return "track-only";
+		queueExecution(first);
+		return "execute";
+	}
+
+	async function resolveActivePlanChoice(ctx: ExtensionContext): Promise<ActivePlanChoice> {
+		if (!ctx.hasUI) return "continue-current";
+
+		const choice = await notifyBeforePrompt(
+			"已有执行计划，怎么处理新计划？",
+			() => ctx.ui.select("已有执行计划，怎么处理新计划？", [
+				"继续当前计划",
+				"补充进当前计划（追加到尾部）",
+				"替换剩余步骤",
+				"忽略新计划",
+			]),
+		);
+
+		if (choice === "补充进当前计划（追加到尾部）") return "append";
+		if (choice === "替换剩余步骤") return "replace-remaining";
+		if (choice === "忽略新计划") return "ignore-new";
+		return "continue-current";
 	}
 
 	// ── create_plan tool ───────────────────────────────────────────────────
@@ -145,14 +196,14 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 		name: "create_plan",
 		label: "Create Plan",
 		description:
-			"Create a tracked execution plan. The plan appears as a progress widget " +
-			"and enables mark_done for step-by-step tracking. Call this when you've " +
-			"analyzed a task and are ready to propose a concrete sequence of steps.",
-		promptSnippet: "create_plan({ steps }) - create a tracked execution plan with numbered steps",
+			"Create a tracked execution plan only when the user explicitly asks for a plan, " +
+			"or when the task is non-trivial, spans multiple dependent steps, and clearly benefits from tracking.",
+		promptSnippet: "create_plan({ steps }) - create a tracked execution plan for non-trivial, multi-step work",
 		promptGuidelines: [
-			"When you formulate a multi-step plan for a task, call create_plan to register it for tracking instead of just describing the steps in text.",
-			"Each step should have a short 'text' (≤60 chars, for the progress widget) and a detailed 'detail' (full description for execution context).",
-			"Only call create_plan when you have a concrete plan ready to execute. Do not call it for brainstorming or listing options.",
+			"Only call create_plan when the user explicitly asks for a plan, or when the task is non-trivial, spans multiple dependent steps, and would benefit from explicit tracking.",
+			"Do not use create_plan for small fixes, single-file edits, routine questions, simple code reading, or straightforward execution.",
+			"Each step should have a short 'text' (≤60 chars, for the progress widget) and a detailed 'detail' (full description with enough context to execute).",
+			"If a tracked plan is already active, do not open a second plan for routine sub-work. Continue current plan unless it truly needs to be extended or replaced.",
 		],
 		parameters: Type.Object({
 			steps: Type.Array(
@@ -164,20 +215,70 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 			),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const planSteps: PlanStep[] = params.steps.map((s, i) => ({
-				step: i + 1,
-				text: s.text.slice(0, 60),
-				detail: s.detail,
-				completed: false,
-			}));
-
+			const drafts = buildPlanDrafts(params.steps);
 			const isRefine = pendingRefine;
 			pendingRefine = false;
+
+			if (!isRefine) {
+				const decision = shouldAutoPlan({
+					prompt: lastUserPrompt,
+					steps: drafts,
+					hasActivePlan: steps.length > 0,
+				});
+				if (!decision.allow) {
+					const current = getCurrentStep();
+					const baseMessage =
+						decision.reason === "straightforward-task"
+							? "Skip tracked plan: current task looks straightforward. Continue execution directly unless user explicitly asks for a plan."
+							: "Skip tracked plan: task is not complex enough for explicit plan tracking yet. Continue execution directly. If complexity grows, you can propose a plan later.";
+					const currentMessage = current
+						? `\n\nCurrent tracked step: ${current.step}. ${current.text}`
+						: "";
+					return {
+						content: [{ type: "text", text: `${baseMessage}${currentMessage}` }],
+						details: { success: false, skipped: true, reason: decision.reason, signals: decision.signals },
+					};
+				}
+			}
+
+			if (steps.length > 0) {
+				const activeChoice = await resolveActivePlanChoice(ctx);
+				if (activeChoice === "continue-current") {
+					const current = getCurrentStep();
+					const nextText = current ? ` Continue with step ${current.step}: ${current.detail}` : " Continue current plan.";
+					return {
+						content: [{ type: "text", text: `A tracked plan is already active.${nextText}` }],
+						details: { success: false, reason: "continue-current-plan" },
+					};
+				}
+				if (activeChoice === "ignore-new") {
+					return {
+						content: [{ type: "text", text: "User ignored the new plan proposal. Continue current work." }],
+						details: { success: false, reason: "ignore-new-plan" },
+					};
+				}
+
+				const mergedSteps =
+					activeChoice === "append"
+						? appendPlanSteps(steps, drafts)
+						: replaceRemainingSteps(steps, drafts);
+				setPlan(mergedSteps, ctx);
+
+				const remaining = getRemainingSteps();
+				const remainingList = remaining.map((step) => `${step.step}. ${step.text}`).join("\n");
+				const actionText = activeChoice === "append" ? "Plan updated by appending new steps." : "Plan updated by replacing remaining steps.";
+				return {
+					content: [{ type: "text", text: `${actionText}\n\n${remainingList}` }],
+					details: { success: true, merged: true, mode: activeChoice, stepCount: mergedSteps.length },
+				};
+			}
+
+			const planSteps = materializePlanSteps(drafts);
 			const choice = await offerTracking(planSteps, isRefine, ctx);
 
 			if (choice === "refine") {
 				pendingRefine = true;
-				const list = planSteps.map((s) => `${s.step}. ${s.text} — ${s.detail}`).join("\n");
+				const list = planSteps.map((step) => `${step.step}. ${step.text} — ${step.detail}`).join("\n");
 				const feedback = lastRefineFeedback;
 				lastRefineFeedback = "";
 				return {
@@ -187,7 +288,7 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 			}
 
 			if (steps.length > 0) {
-				const list = steps.map((s) => `${s.step}. ${s.text}`).join("\n");
+				const list = steps.map((step) => `${step.step}. ${step.text}`).join("\n");
 				return {
 					content: [{ type: "text", text: `Plan created (${steps.length} steps):\n${list}` }],
 					details: { success: true, stepCount: steps.length },
@@ -210,6 +311,7 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 		promptSnippet: "mark_done(step) - report a plan step as completed",
 		promptGuidelines: [
 			"Only call mark_done when there is an active tracked plan. If no plan is being tracked, ignore this tool.",
+			"After calling mark_done, continue with the next tracked step unless the user explicitly paused execution.",
 		],
 		parameters: Type.Object({
 			step: Type.Number({ description: "The step number to mark as completed" }),
@@ -223,7 +325,7 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 				};
 			}
 
-			const item = steps.find((t) => t.step === params.step);
+			const item = steps.find((step) => step.step === params.step);
 			if (!item) {
 				return {
 					content: [{ type: "text", text: `Step ${params.step} not found in current plan.` }],
@@ -247,7 +349,7 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 				? `✓ Step ${params.step} complete: ${params.summary}`
 				: `✓ Step ${params.step} marked complete.`;
 
-			if (steps.every((s) => s.completed)) {
+			if (steps.every((step) => step.completed)) {
 				const log = buildWorkLog();
 				pi.sendMessage(
 					{ customType: "plan-tracker-complete", content: log, display: true },
@@ -260,34 +362,43 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 				};
 			}
 
-			const remaining = steps.filter((s) => !s.completed);
-			if (remaining.length > 0 && !skipConfirmations && pauseOnStep) {
-				const nextStep = remaining[0];
-				const choice = await ctx.ui.select(
-					`${message}\n\nNext: Step ${nextStep.step} — ${nextStep.text}`,
-					["Continue", "Run all remaining", "Stop here", "Give feedback"],
+			const nextStep = getCurrentStep();
+			if (!nextStep) {
+				throw new Error("Plan is missing the next pending step after mark_done");
+			}
+
+			let feedbackForNextStep = "";
+			let paused = false;
+
+			if (!skipConfirmations && pauseOnStep) {
+				const nextPrompt = `${message}\n\nNext: Step ${nextStep.step} — ${nextStep.text}`;
+				const choice = await notifyBeforePrompt(
+					nextPrompt,
+					() => ctx.ui.select(nextPrompt, ["Continue", "Run all remaining", "Stop here", "Give feedback"]),
 				);
 				if (choice === "Run all remaining") {
 					skipConfirmations = true;
 				} else if (choice === "Stop here") {
 					ctx.abort();
-					return {
-						content: [{ type: "text", text: `${message}\n\nExecution paused by user.` }],
-						details: { success: true, step: params.step, paused: true },
-					};
+					paused = true;
 				} else if (choice === "Give feedback") {
-					const feedback = await ctx.ui.input("Feedback for next step:");
-					const feedbackText = feedback?.trim() ? `\nUser feedback: ${feedback.trim()}` : "";
-					return {
-						content: [{ type: "text", text: `${message}${feedbackText}` }],
-						details: { success: true, step: params.step },
-					};
+					const feedback = await notifyBeforePrompt("Feedback for next step:", () => ctx.ui.input("Feedback for next step:"));
+					feedbackForNextStep = feedback?.trim() ?? "";
 				}
 			}
 
+			if (paused) {
+				return {
+					content: [{ type: "text", text: `${message}\n\nExecution paused by user.` }],
+					details: { success: true, step: params.step, paused: true },
+				};
+			}
+
+			queueExecution(nextStep, feedbackForNextStep || undefined);
+			const feedbackText = feedbackForNextStep ? `\nUser feedback: ${feedbackForNextStep}` : "";
 			return {
-				content: [{ type: "text", text: message }],
-				details: { success: true, step: params.step },
+				content: [{ type: "text", text: `${message}${feedbackText}\n\nQueued step ${nextStep.step}.` }],
+				details: { success: true, step: params.step, nextStep: nextStep.step },
 			};
 		},
 	});
@@ -312,16 +423,16 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 		description: "Show current plan progress",
 		handler: async (_args, ctx) => {
 			if (steps.length === 0) {
-				ctx.ui.notify("No active plan. Ask the AI to create one, or use /track to create manually.", "info");
+				ctx.ui.notify("No active plan. Ask the AI to create one with /plan or by requesting a tracked plan.", "info");
 				return;
 			}
-			const done = steps.filter((s) => s.completed).length;
+			const done = steps.filter((step) => step.completed).length;
 			const elapsed = formatElapsed(Date.now() - planStartedAt);
 			const list = steps
-				.map((s) => {
-					const check = s.completed ? "✓" : "○";
-					const summary = s.completed && s.summary ? ` → ${s.summary}` : "";
-					return `  ${s.step}. ${check} ${s.text}${summary}`;
+				.map((step) => {
+					const check = step.completed ? "✓" : "○";
+					const summary = step.completed && step.summary ? ` → ${step.summary}` : "";
+					return `  ${step.step}. ${check} ${step.text}${summary}`;
 				})
 				.join("\n");
 			ctx.ui.notify(`Plan Progress (${done}/${steps.length}) — ${elapsed}\n\n${list}`, "info");
@@ -342,7 +453,7 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 				ctx.ui.notify("Usage: /done <step number>", "error");
 				return;
 			}
-			const item = steps.find((s) => s.step === n);
+			const item = steps.find((step) => step.step === n);
 			if (!item) {
 				ctx.ui.notify(`Step ${n} not found.`, "error");
 				return;
@@ -357,7 +468,7 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 			persist();
 			ctx.ui.notify(`✓ Step ${n} marked complete.`, "info");
 
-			if (steps.every((s) => s.completed)) {
+			if (steps.every((step) => step.completed)) {
 				const log = buildWorkLog();
 				pi.sendMessage(
 					{ customType: "plan-tracker-complete", content: log, display: true },
@@ -370,20 +481,22 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 
 	// ── Context injection ──────────────────────────────────────────────────
 
-	pi.on("before_agent_start", async () => {
+	pi.on("before_agent_start", async (event) => {
+		lastUserPrompt = event.prompt;
 		if (steps.length === 0) return;
 
-		const remaining = steps.filter((s) => !s.completed);
+		const remaining = getRemainingSteps();
 		if (remaining.length === 0) return;
 
-		const done = steps.filter((s) => s.completed).length;
+		const done = steps.filter((step) => step.completed).length;
 		const current = remaining[0];
 		const next = remaining.length > 1 ? remaining[1] : null;
 
 		let content = `[Plan Progress: ${done}/${steps.length} complete]\n`;
 		content += `Current: Step ${current.step} — ${current.detail}\n`;
 		if (next) content += `Next: Step ${next.step} — ${next.detail}\n`;
-		content += `\nAfter completing each step, call mark_done(step) with a brief summary.`;
+		content += "\nAfter completing each step, call mark_done(step) with a brief summary.";
+		content += " Do not create a new plan for routine substeps while this tracked plan is active.";
 
 		return {
 			message: {
@@ -398,8 +511,8 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 
 	pi.on("context", async (event) => {
 		return {
-			messages: event.messages.filter((m) => {
-				const msg = m as AgentMessage & { customType?: string };
+			messages: event.messages.filter((message) => {
+				const msg = message as AgentMessage & { customType?: string };
 				if (msg.customType === "plan-tracker-context" && steps.length === 0) return false;
 				return true;
 			}),
@@ -412,7 +525,7 @@ export default function planTrackerExtension(pi: ExtensionAPI): void {
 		const entries = ctx.sessionManager.getEntries();
 
 		const stateEntry = entries
-			.filter((e: { type: string; customType?: string }) => e.type === "custom" && e.customType === "plan-tracker")
+			.filter((entry: { type: string; customType?: string }) => entry.type === "custom" && entry.customType === "plan-tracker")
 			.pop() as { data?: { steps?: PlanStep[]; startedAt?: number } } | undefined;
 
 		if (stateEntry?.data?.steps && stateEntry.data.steps.length > 0) {

@@ -11,12 +11,14 @@ agentry/
 ├── pi-package/         # Pi agent 的自定义扩展（TypeScript）
 │   └── extensions/
 │       ├── btw/        # 侧边栏对话浮层（/btw 或 Ctrl+Alt+B）
-│       ├── plan-tracker/ # 非模态计划追踪（/plan、/track）
-│       ├── review/     # AI 代码审查（/review）
-│       ├── static-check/ # 多语言静态检查（tsc/mypy/golangci-lint/cargo）
+│       ├── plan-tracker/ # 非模态计划追踪（/plan）
+│       ├── review/     # AI 代码审查（/review、/end-review）
+│       ├── static-check/ # 多语言静态检查（tsc/mypy/golangci-lint/go vet/cargo）
 │       ├── files/       # 交互式文件浏览器（/files、/diff）
-│       ├── web-search/ # web_fetch 工具（让 LLM 访问 URL）
+│       ├── web-search/ # web_search + web_fetch + get_search_content 工具
+│       ├── notify/      # agent 完成后发送桌面通知
 │       ├── questionnaire/    # 交互式问卷工具（单选/多选/自定义输入）
+│       ├── caveman/    # 复用 caveman skill 的会话级简洁回复模式（/caveman）
 │       └── rtk.ts      # RTK token 节省代理
 ├── agents/             # `.agents` 目录（stow 到 $HOME）含 Skills
 ├── claude/             # `.claude` 目录（stow 到 $HOME）含 Claude 配置
@@ -32,13 +34,14 @@ agentry/
 | 扩展 | 命令/快捷键 | 功能 |
 |------|------------|------|
 | **btw** | `/btw`、`Ctrl+Alt+B` | 侧边悬浮对话，不污染主 session |
-| **plan-tracker** | `/plan`、`/track`、`Ctrl+Alt+P` | 非模态计划检测 + 执行追踪 + 工作日志 |
-| **review** | `/review` | Fork session 进行代码审查，支持 P0-P3 rubric |
-| **static-check** | `/typecheck` | 编辑文件后自动运行类型检查，可自动修复 |
+| **plan-tracker** | `/plan` | 非模态计划检测 + 执行追踪 + 工作日志 |
+| **review** | `/review`、`/end-review` | Fork session 进行代码审查，支持 P0-P3 rubric |
+| **static-check** | `/staticcheck` | 编辑文件后自动运行类型检查，可自动修复 |
 | **files** | `/files`、`/diff` | 交互式文件浏览器（模糊搜索 + open/reveal/diff） |
-| **web-search** | `web_fetch` tool | 让 LLM 抓取 URL / DuckDuckGo 搜索（二进制内容自动 fallback 到 markitdown） |
+| **web-search** | `web_search` + `web_fetch` + `get_search_content` tools | `web_search` 用于 DuckDuckGo 搜索，`web_fetch` 用于 URL 内容抓取，`get_search_content` 用于读取之前搜索/抓取结果的完整缓存内容（二进制 URL 自动 fallback 到 markitdown） |
 | **notify** | 自动 | agent 完成工作后发送通知（OSC 777/99 或终端 bell）|
 | **questionnaire** | `questionnaire` tool | 单题/多题交互式问卷（单选/多选/自定义输入） |
+| **caveman** | `/caveman [level|off]` | 复用已安装 caveman skill，在当前 session 启用极简回复风格 |
 | **rtk** | `/rtk` | 通过 rtk 代理压缩 token，节省费用 |
 | **markitdown** | skill（自动触发） | 将 PDF/DOCX/PPTX/XLSX 等文档转为 Markdown（via `uv tool run markitdown`） |
 

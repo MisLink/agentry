@@ -2,19 +2,19 @@
  * Multi-language Static Checker Extension
  *
  * After every agent turn that edits files, runs the appropriate language
- * checker (tsc / mypy / go vet / cargo check), computes the delta against
- * the previous check, and — in auto-fix mode — injects new errors back into
+ * checker (tsc / mypy / golangci-lint with go vet fallback / cargo check),
+ * computes the delta against the previous check, and — in auto-fix mode — injects new errors back into
  * the LLM context so it can fix them immediately.
  *
  * Commands:
- *   /typecheck            — run checks now (manual trigger)
- *   /typecheck mode <auto-fix|notify-only>
- *   /typecheck disable <id>
- *   /typecheck enable <id>
- *   /typecheck status
+ *   /staticcheck          — run checks now (manual trigger)
+ *   /staticcheck mode <auto-fix|notify-only>
+ *   /staticcheck disable <id>
+ *   /staticcheck enable <id>
+ *   /staticcheck status
  *
  * CLI flag:
- *   --no-typecheck        — disable all checkers for this session
+ *   --no-staticcheck      — disable all checkers for this session
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -60,7 +60,7 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
         },
       );
 
-      // Step 11: honour AbortSignal for manual /typecheck skip.
+      // Step 11: honour AbortSignal for manual /staticcheck skip.
       signal?.addEventListener("abort", () => {
         try {
           child.kill();
@@ -332,33 +332,33 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
 
   // ── CLI flag ──────────────────────────────────────────────────────────────
 
-  pi.registerFlag("no-typecheck", {
+  pi.registerFlag("no-staticcheck", {
     description: "Disable all static checkers for this session",
     type: "boolean",
     default: false,
   });
 
   pi.on("session_start", async (_event, ctx) => {
-    if (pi.getFlag("no-typecheck") === true) {
+    if (pi.getFlag("no-staticcheck") === true) {
       for (const c of ALL_CHECKERS) state.config.disabled.add(c.id);
-      ctx.ui.notify("Static check: disabled via --no-typecheck", "info");
+      ctx.ui.notify("Static check: disabled via --no-staticcheck", "info");
     }
   });
 
-  // ── /typecheck command ─────────────────────────────────────────────────────
+  // ── /staticcheck command ───────────────────────────────────────────────────
 
-  pi.registerCommand("typecheck", {
+  pi.registerCommand("staticcheck", {
     description:
       "Run static checks manually, or configure: mode / disable / enable / status",
     handler: async (args, ctx) => {
       const parts = args.trim().split(/\s+/).filter(Boolean);
       const sub = parts[0] ?? "";
 
-      // /typecheck mode <auto-fix|notify-only>
+      // /staticcheck mode <auto-fix|notify-only>
       if (sub === "mode") {
         const m = parts[1];
         if (m !== "auto-fix" && m !== "notify-only") {
-          ctx.ui.notify("Usage: /typecheck mode [auto-fix|notify-only]", "error");
+          ctx.ui.notify("Usage: /staticcheck mode [auto-fix|notify-only]", "error");
           return;
         }
         state.config.mode = m;
@@ -366,11 +366,11 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
         return;
       }
 
-      // /typecheck disable <id>
+      // /staticcheck disable <id>
       if (sub === "disable") {
         const id = parts[1];
         if (!id) {
-          ctx.ui.notify("Usage: /typecheck disable <checker-id>", "error");
+          ctx.ui.notify("Usage: /staticcheck disable <checker-id>", "error");
           return;
         }
         state.config.disabled.add(id);
@@ -378,11 +378,11 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
         return;
       }
 
-      // /typecheck enable <id>
+      // /staticcheck enable <id>
       if (sub === "enable") {
         const id = parts[1];
         if (!id) {
-          ctx.ui.notify("Usage: /typecheck enable <checker-id>", "error");
+          ctx.ui.notify("Usage: /staticcheck enable <checker-id>", "error");
           return;
         }
         state.config.disabled.delete(id);
@@ -390,7 +390,7 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
         return;
       }
 
-      // /typecheck status
+      // /staticcheck status
       if (sub === "status") {
         const checkerList = ALL_CHECKERS.map((c) => {
           const tag = state.config.disabled.has(c.id) ? " [disabled]" : "";
@@ -410,7 +410,7 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
       // Default: scan from ctx.cwd upward to find project roots for each checker.
       //
       // We cannot rely on state.modifiedFiles here: by the time the user types
-      // /typecheck, agent_end has already called resetTurn() which empties it.
+      // /staticcheck, agent_end has already called resetTurn() which empties it.
       // Instead we walk up from the current directory to find real project roots.
       state.resetSession();
 

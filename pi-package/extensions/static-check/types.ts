@@ -123,7 +123,7 @@ export interface LanguageChecker {
 
 /**
  * Runtime configuration for the extension.
- * Mutable at runtime via /typecheck commands.
+ * Mutable at runtime via /staticcheck commands.
  */
 export interface CheckerConfig {
   /**

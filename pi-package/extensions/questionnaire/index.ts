@@ -9,6 +9,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text, truncateToWidth } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
+import { notifyBeforePrompt } from "../notify/index.js";
 import { QuestionnaireComponent } from "./component.js";
 import type { Answer, Question, QuestionnaireResult } from "./types.js";
 
@@ -92,9 +93,15 @@ export default function questionnaire(pi: ExtensionAPI) {
 				multiSelect: q.multiSelect === true,
 			}));
 
-			const result = await ctx.ui.custom<QuestionnaireResult>((tui, theme, _kb, done) => {
-				return new QuestionnaireComponent(questions, tui, theme, done);
-			});
+			const promptTitle = questions.length === 1
+				? questions[0]?.prompt ?? "Questionnaire"
+				: `Questionnaire (${questions.length} questions)`;
+			const result = await notifyBeforePrompt(
+				promptTitle,
+				() => ctx.ui.custom<QuestionnaireResult>((tui, theme, _kb, done) => {
+					return new QuestionnaireComponent(questions, tui, theme, done);
+				}),
+			);
 
 			if (result.cancelled) {
 				return {

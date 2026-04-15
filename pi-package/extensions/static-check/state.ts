@@ -12,7 +12,7 @@ import type { CheckerConfig, Diagnostic, ProjectCheckState } from "./types.js";
 import { DEFAULT_CONFIG } from "./types.js";
 
 export class CheckerState {
-  // ── Global config (mutated by /typecheck commands) ──────────────────────
+  // ── Global config (mutated by /staticcheck commands) ────────────────────
   config: CheckerConfig = { ...DEFAULT_CONFIG, disabled: new Set() };
 
   // ── Per-turn file tracking (Step 4) ────────────────────────────────────

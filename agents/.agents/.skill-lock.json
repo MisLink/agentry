@@ -253,6 +253,15 @@
       "pluginName": "grafana-core",
       "installedAt": "2026-04-16T02:06:41.728Z",
       "updatedAt": "2026-04-16T02:06:41.728Z"
+    },
+    "caveman": {
+      "source": "JuliusBrussee/caveman",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/JuliusBrussee/caveman.git",
+      "skillPath": "caveman/SKILL.md",
+      "skillFolderHash": "825e13085d1515fe67881b2123f3bf9b34c26154",
+      "installedAt": "2026-04-18T09:59:03.070Z",
+      "updatedAt": "2026-04-18T09:59:03.070Z"
     }
   },
   "dismissed": {

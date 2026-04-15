@@ -26,6 +26,7 @@ import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@m
 import { getModelForSlot } from "../../lib/model-router.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { notifyBeforePrompt } from "../notify/index.js";
 
 // ─── VCS Detection ───────────────────────────────────────────────────────────
 
@@ -420,11 +421,14 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 		}
 
 		// Interactive selector
-		const choice = await ctx.ui.select("选择审查内容：", [
-			"当前未提交改动",
-			"相对某个分支的改动",
-			"某个 commit",
-		]);
+		const choice = await notifyBeforePrompt(
+			"选择审查内容：",
+			() => ctx.ui.select("选择审查内容：", [
+				"当前未提交改动",
+				"相对某个分支的改动",
+				"某个 commit",
+			]),
+		);
 		if (!choice) return null;
 
 		if (choice === "当前未提交改动") return { type: "uncommitted" };
@@ -439,7 +443,7 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 				const excluded = new Set(currentBookmarks);
 				const others = allRefs.filter((b) => !excluded.has(b));
 				if (others.length === 0) { ctx.ui.notify("没有其他可用分支/bookmark", "error"); return null; }
-				const branch = await ctx.ui.select("选择基础分支：", others);
+				const branch = await notifyBeforePrompt("选择基础分支：", () => ctx.ui.select("选择基础分支：", others));
 				if (!branch) return null;
 				return { type: "baseBranch", branch };
 			}
@@ -450,7 +454,7 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 			]);
 			const others = allRefs.filter((b) => b !== currentRef);
 			if (others.length === 0) { ctx.ui.notify("没有其他可用分支/bookmark", "error"); return null; }
-			const branch = await ctx.ui.select("选择基础分支：", others);
+			const branch = await notifyBeforePrompt("选择基础分支：", () => ctx.ui.select("选择基础分支：", others));
 			if (!branch) return null;
 			return { type: "baseBranch", branch };
 		}
@@ -458,9 +462,12 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 		if (choice === "某个 commit") {
 			const commits = await getRecentCommits(pi);
 			if (commits.length === 0) { ctx.ui.notify("没有找到记录", "error"); return null; }
-			const commitChoice = await ctx.ui.select(
+			const commitChoice = await notifyBeforePrompt(
 				"选择：",
-				commits.map((c) => `${c.sha.slice(0, 7)}  ${c.title}`),
+				() => ctx.ui.select(
+					"选择：",
+					commits.map((c) => `${c.sha.slice(0, 7)}  ${c.title}`),
+				),
 			);
 			if (!commitChoice) return null;
 			const sha = commitChoice.trim().split(/\s+/)[0] ?? "";
@@ -563,18 +570,21 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 	pi.on("agent_end", async (_event, ctx) => {
 		if (!reviewOriginId || !ctx.hasUI) return;
 
-		const choice = await ctx.ui.select("审查完成，下一步？", [
-			"修复所有问题",
-			"继续（自由输入）",
-			"返回主 session（/end-review）",
-		]);
+		const choice = await notifyBeforePrompt(
+			"审查完成，下一步？",
+			() => ctx.ui.select("审查完成，下一步？", [
+				"修复所有问题",
+				"继续（自由输入）",
+				"返回主 session（/end-review）",
+			]),
+		);
 
 		if (choice === "修复所有问题") {
 			pi.sendUserMessage(
 				"请修复上述审查中发现的所有 P0、P1、P2 问题。每修复一个问题后简要说明改了什么。",
 			);
 		} else if (choice === "继续（自由输入）") {
-			const input = await ctx.ui.input("输入你的指示：");
+			const input = await notifyBeforePrompt("输入你的指示：", () => ctx.ui.input("输入你的指示："));
 			if (input?.trim()) {
 				pi.sendUserMessage(input.trim());
 			}

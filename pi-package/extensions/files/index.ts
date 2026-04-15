@@ -30,6 +30,7 @@ import {
 	Text,
 	type TUI,
 } from "@mariozechner/pi-tui";
+import { notifyBeforePrompt } from "../notify/index.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -396,32 +397,35 @@ async function showActions(
 		actions.unshift({ value: "diff", label: "Diff in VS Code" });
 	}
 
-	const choice = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
-		const container = new Container();
-		container.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
-		container.addChild(new Text(
-			` ${theme.fg("accent", theme.bold(file.display))}`, 0, 0,
-		));
+	const choice = await notifyBeforePrompt(
+		`File actions: ${file.display}`,
+		() => ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+			const container = new Container();
+			container.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
+			container.addChild(new Text(
+				` ${theme.fg("accent", theme.bold(file.display))}`, 0, 0,
+			));
 
-		const list = new SelectList(actions, actions.length, {
-			selectedPrefix: (t) => theme.fg("accent", t),
-			selectedText: (t) => theme.fg("accent", t),
-			description: (t) => theme.fg("muted", t),
-			scrollInfo: (t) => theme.fg("dim", t),
-			noMatch: (t) => theme.fg("warning", t),
-		});
-		list.onSelect = (item) => done(item.value);
-		list.onCancel = () => done(null);
-		container.addChild(list);
-		container.addChild(new Text(theme.fg("dim", " Enter confirm · Esc cancel"), 0, 0));
-		container.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
+			const list = new SelectList(actions, actions.length, {
+				selectedPrefix: (t) => theme.fg("accent", t),
+				selectedText: (t) => theme.fg("accent", t),
+				description: (t) => theme.fg("muted", t),
+				scrollInfo: (t) => theme.fg("dim", t),
+				noMatch: (t) => theme.fg("warning", t),
+			});
+			list.onSelect = (item) => done(item.value);
+			list.onCancel = () => done(null);
+			container.addChild(list);
+			container.addChild(new Text(theme.fg("dim", " Enter confirm · Esc cancel"), 0, 0));
+			container.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
 
-		return {
-			render: (w: number) => container.render(w),
-			invalidate: () => container.invalidate(),
-			handleInput(data: string) { list.handleInput(data); tui.requestRender(); },
-		};
-	});
+			return {
+				render: (w: number) => container.render(w),
+				invalidate: () => container.invalidate(),
+				handleInput(data: string) { list.handleInput(data); tui.requestRender(); },
+			};
+		}),
+	);
 
 	if (!choice) return;
 
@@ -448,7 +452,7 @@ async function showActions(
 async function showFilePicker(
 	ctx: ExtensionContext, files: FileEntry[],
 ): Promise<FileEntry | null> {
-	return ctx.ui.custom<FileEntry | null>((tui, theme, _kb, done) => {
+	return notifyBeforePrompt("Browse files", () => ctx.ui.custom<FileEntry | null>((tui, theme, _kb, done) => {
 		const input = new Input();
 		let query = "";
 		let filtered = files;
@@ -564,7 +568,7 @@ async function showFilePicker(
 		}
 
 		return { render, invalidate, handleInput };
-	});
+	}));
 }
 
 // ── Extension Entry ────────────────────────────────────────────────────────

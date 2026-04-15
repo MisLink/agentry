@@ -22,9 +22,12 @@
     ]
   },
   "devDependencies": {
+    "@types/jsdom": "^28.0.1",
     "typescript": "^6.0.2"
   },
   "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "jsdom": "^29.0.2",
     "node-html-markdown": "^2.0.0"
   }
 }

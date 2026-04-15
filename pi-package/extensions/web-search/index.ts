@@ -1,13 +1,18 @@
 /**
  * Web Fetch Extension for pi
  *
- * Registers a `web_fetch` tool so the LLM can retrieve any URL and get
- * readable markdown back. No API key required. Fully local — no external
- * conversion services.
+ * Registers `web_search` for lightweight DuckDuckGo search, `web_fetch`
+ * for URL/content retrieval as readable markdown, and `get_search_content`
+ * for retrieving stored full content from earlier search/fetch results.
+ * No API key required. Fully local — no external conversion services.
  *
  * Typical usage by the LLM:
- *   - Search: fetch https://html.duckduckgo.com/html/?q=your+query
- *   - Read a page: fetch https://example.com/some/page
+ *   - Search: `web_search({ query: "pi extension docs" })`
+ *   - Read a page: `web_fetch({ url: "https://example.com/some/page" })`
+ *
+ * Migration note:
+ *   - Legacy DuckDuckGo search URLs passed to `web_fetch` still work for
+ *     backward compatibility with older prompts and resumed sessions.
  *
  * Content negotiation:
  *   - Sends `Accept: text/markdown` first; sites like Cloudflare Docs return
@@ -22,200 +27,324 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent"
-import { execFile } from "node:child_process"
 import { Type } from "@sinclair/typebox"
-import { NodeHtmlMarkdown } from "node-html-markdown"
+import {
+  DEFAULT_MAX_LENGTH,
+  fetchDirect,
+  isBinaryContent,
+  normalizeFetchTargets,
+  runMarkitdown,
+} from "./fetch"
+import {
+  htmlPageToMarkdown,
+  htmlToMarkdown,
+  shouldFallbackToMarkitdown,
+} from "./html-extract"
+import {
+  DEFAULT_MAX_RESULTS,
+  buildDuckDuckGoSearchUrl,
+  extractDuckDuckGoResults,
+  extractDuckDuckGoResultsFromHtml,
+  formatDuckDuckGoResults,
+  isDuckDuckGoSearchUrl,
+  type DuckDuckGoSearchResult,
+} from "./search"
+import {
+  getWebResponse,
+  storeWebResponse,
+  type StoredFetchContent,
+  type StoredSearchQuery,
+} from "./storage"
+import { resolveGitHubFetchPlan } from "./github"
 
-const DEFAULT_MAX_LENGTH = 12_000
-
-// ── HTML → Markdown ───────────────────────────────────────────────────────
-
-const nhm = new NodeHtmlMarkdown({
-  ignore: ["nav", "footer", "header", "aside", "script", "style", "noscript"],
-  keepDataImages: false,
-})
-
-/**
- * DuckDuckGo wraps result links in redirect URLs like:
- *   //duckduckgo.com/l/?uddg=https%3A%2F%2Factual-site.com&...
- * Decode these so the LLM sees the real destination.
- */
-function resolveDdgUrls(markdown: string, baseUrl: string): string {
-  return markdown.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, text, href) => {
-    // DuckDuckGo redirect
-    const ddgMatch = href.match(/[?&]uddg=([^&]+)/)
-    if (ddgMatch) return `[${text}](${decodeURIComponent(ddgMatch[1])})`
-
-    // Protocol-relative
-    if (href.startsWith("//")) {
-      try {
-        return `[${text}](${new URL(baseUrl).protocol}${href})`
-      } catch {
-        return `[${text}](https:${href})`
-      }
-    }
-
-    // Relative URL
-    if (
-      !href.startsWith("http") &&
-      !href.startsWith("#") &&
-      !href.startsWith("mailto:")
-    ) {
-      try {
-        return `[${text}](${new URL(href, baseUrl).href})`
-      } catch {
-        return `[${text}](${href})`
-      }
-    }
-
-    return `[${text}](${href})`
-  })
+export {
+  buildDuckDuckGoSearchUrl,
+  extractDuckDuckGoResults,
+  htmlPageToMarkdown,
+  isDuckDuckGoSearchUrl,
 }
 
-function htmlToMarkdown(html: string, baseUrl: string): string {
-  const md = nhm.translate(html)
-  return resolveDdgUrls(md, baseUrl)
-}
-
-// ── Binary content detection ──────────────────────────────────────────────
-
-/** Content-Type prefixes that indicate binary/document content. */
-const BINARY_CONTENT_TYPES = [
-  "application/pdf",
-  "application/vnd.openxmlformats-officedocument", // .docx, .pptx, .xlsx
-  "application/vnd.ms-excel",
-  "application/vnd.ms-powerpoint",
-  "application/msword",
-  "application/epub+zip",
-  "application/zip",
-  "application/vnd.ms-outlook",
-]
-
-/** URL extensions that markitdown handles better than HTML conversion. */
-const BINARY_EXTENSIONS = /\.(pdf|docx|pptx|xlsx|epub|msg|ipynb)($|\?|#)/i
-
-function isBinaryContent(contentType: string, url: string): boolean {
-  const ct = contentType.toLowerCase()
-  if (BINARY_CONTENT_TYPES.some((prefix) => ct.startsWith(prefix))) return true
-  if (BINARY_EXTENSIONS.test(new URL(url).pathname)) return true
-  return false
-}
-
-// ── markitdown fallback ───────────────────────────────────────────────────
-
-/** Cache the resolved markitdown command so we only probe once. */
-let resolvedMarkitdown: { cmd: string; args: string[] } | undefined
-
-/**
- * Find the best way to run markitdown:
- * 1. `markitdown` on PATH (global install via mise/pipx/pip — instant)
- * 2. Fallback to `uv tool run --from 'markitdown[all]'` (cached after first run)
- */
-function findMarkitdown(): Promise<{ cmd: string; args: string[] }> {
-  if (resolvedMarkitdown) return Promise.resolve(resolvedMarkitdown)
-
-  return new Promise((resolve) => {
-    execFile("markitdown", ["--version"], { timeout: 5_000 }, (err) => {
-      if (!err) {
-        resolvedMarkitdown = { cmd: "markitdown", args: [] }
-      } else {
-        resolvedMarkitdown = {
-          cmd: "uv",
-          args: ["tool", "run", "--from", "markitdown[all]", "markitdown"],
-        }
-      }
-      resolve(resolvedMarkitdown)
-    })
-  })
-}
-
-/**
- * Convert a URL to Markdown via markitdown.
- * Prefers a global install on PATH for speed; falls back to uv tool run.
- */
-function runMarkitdown(url: string, signal?: AbortSignal): Promise<string> {
-  return new Promise((resolve, reject) => {
-    findMarkitdown()
-      .then(({ cmd, args }) => {
-        const child = execFile(
-          cmd,
-          [...args, url],
-          { encoding: "utf8", maxBuffer: 50 * 1024 * 1024, timeout: 120_000 },
-          (err, stdout, stderr) => {
-            if (err) {
-              const msg = stderr?.trim() || err.message
-              reject(new Error(`markitdown failed for ${url}: ${msg}`))
-              return
-            }
-            resolve(stdout)
-          }
-        )
-        signal?.addEventListener("abort", () => child.kill(), { once: true })
-      })
-      .catch(reject)
-  })
-}
-
-// ── Fetch helper ──────────────────────────────────────────────────────────
-
-const BROWSER_HEADERS = {
-  "User-Agent":
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-  "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8",
-}
-
-/**
- * Fetch the URL directly, preferring `text/markdown` via content negotiation.
- * Sites like Cloudflare Docs honour the Accept header and return native Markdown.
- */
-async function fetchDirect(
-  url: string,
-  signal?: AbortSignal
-): Promise<{ text: string; contentType: string; status: number }> {
-  const response = await fetch(url, {
-    signal,
-    headers: {
-      ...BROWSER_HEADERS,
-      Accept: "text/markdown, text/html, application/xhtml+xml, */*;q=0.8",
-    },
-  })
-
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status} ${response.statusText} — ${url}`)
+function formatStoredSearchQuery(data: StoredSearchQuery): string {
+  if (data.results.length === 0) {
+    return `No stored search results found for "${data.query}".`
   }
 
-  const contentType = response.headers.get("content-type") ?? ""
-  const raw = await response.text()
-  return { text: raw, contentType, status: response.status }
+  const lines = [`# Search results for "${data.query}"`, ""]
+
+  for (const [index, result] of data.results.entries()) {
+    lines.push(`${index + 1}. [${result.title}](${result.url})`)
+    if (result.snippet) lines.push(`   ${result.snippet}`)
+  }
+
+  return lines.join("\n")
+}
+
+function formatStoredFetchContent(data: StoredFetchContent): string {
+  return `# ${data.title}\n\n${data.content}`
+}
+
+function withResponseId(text: string, responseId: string): string {
+  return `${text}\n\n[responseId: ${responseId}]`
+}
+
+function matchesDomainFilters(url: string, domainFilter: string[] | undefined): boolean {
+  if (!domainFilter || domainFilter.length === 0) return true
+
+  const includes = domainFilter
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value.length > 0 && !value.startsWith("-"))
+  const excludes = domainFilter
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value.startsWith("-") && value.length > 1)
+    .map((value) => value.slice(1))
+
+  let hostname: string
+  try {
+    hostname = new URL(url).hostname.toLowerCase()
+  } catch {
+    return false
+  }
+
+  const matchesDomain = (domain: string): boolean => {
+    return hostname === domain || hostname.endsWith(`.${domain}`)
+  }
+
+  if (excludes.some(matchesDomain)) return false
+  if (includes.length === 0) return true
+  return includes.some(matchesDomain)
+}
+
+function filterSearchResults(
+  results: DuckDuckGoSearchResult[],
+  domainFilter: string[] | undefined,
+  maxResults: number
+): DuckDuckGoSearchResult[] {
+  const filtered = results.filter((result) => matchesDomainFilters(result.url, domainFilter))
+  return filtered.slice(0, maxResults)
+}
+
+type FetchedUrlResult = {
+  url: string
+  title: string
+  content: string
+  status: number
+  contentType: string
+  converter: string
+}
+
+async function fetchResolvedUrlAsMarkdown(
+  requestUrl: string,
+  displayUrl: string,
+  signal?: AbortSignal,
+  forcedConverter?: string
+): Promise<FetchedUrlResult> {
+  const result = await fetchDirect(requestUrl, signal)
+  let text: string
+  let converter = forcedConverter ?? "raw"
+
+  if (isBinaryContent(result.contentType, requestUrl)) {
+    text = await runMarkitdown(requestUrl, signal)
+    converter = forcedConverter ?? "markitdown"
+  } else if (
+    result.contentType.includes("text/markdown") ||
+    result.contentType.includes("text/plain")
+  ) {
+    text = result.text
+    converter = forcedConverter ?? "native"
+  } else if (result.contentType.includes("text/html")) {
+    if (isDuckDuckGoSearchUrl(displayUrl)) {
+      text = htmlToMarkdown(result.text, displayUrl)
+      converter = forcedConverter ?? "node-html-markdown-ddg-compat"
+    } else {
+      const htmlResult = htmlPageToMarkdown(result.text, displayUrl)
+      text = htmlResult.text
+      converter = forcedConverter ?? htmlResult.converter
+
+      if (shouldFallbackToMarkitdown(text)) {
+        try {
+          text = await runMarkitdown(requestUrl, signal)
+          converter = forcedConverter ?? "markitdown-fallback"
+        } catch {
+          // Keep HTML-derived markdown when markitdown fallback fails.
+        }
+      }
+    }
+  } else {
+    text = result.text
+  }
+
+  return {
+    url: displayUrl,
+    title: displayUrl,
+    content: text,
+    status: result.status,
+    contentType: result.contentType,
+    converter,
+  }
+}
+
+async function fetchUrlAsMarkdown(
+  url: string,
+  signal?: AbortSignal
+): Promise<FetchedUrlResult> {
+  const githubPlan = resolveGitHubFetchPlan(url)
+
+  if (githubPlan.kind === "raw-file") {
+    return fetchResolvedUrlAsMarkdown(githubPlan.rawUrl, url, signal, "github-raw-file")
+  }
+
+  if (githubPlan.kind === "repo-readme") {
+    for (const readmeUrl of githubPlan.readmeUrls) {
+      try {
+        return await fetchResolvedUrlAsMarkdown(readmeUrl, url, signal, "github-readme")
+      } catch {
+        // Try next README candidate.
+      }
+    }
+  }
+
+  if (githubPlan.kind === "tree") {
+    return {
+      url,
+      title: url,
+      content: [
+        `# GitHub directory ${githubPlan.owner}/${githubPlan.repo}`,
+        "",
+        `Path: ${githubPlan.path}`,
+        `Open: ${githubPlan.treeUrl}`,
+        "",
+        "Directory pages are not cloned by this lightweight fetcher. Open specific blob links or repo README for direct content.",
+      ].join("\n"),
+      status: 200,
+      contentType: "text/markdown",
+      converter: "github-tree-summary",
+    }
+  }
+
+  return fetchResolvedUrlAsMarkdown(url, url, signal)
+}
+
+function formatMultiFetchSummary(
+  results: FetchedUrlResult[],
+  failures: Array<{ url: string; error: string }>
+): string {
+  const lines = [`# Fetched ${results.length} URL(s)`, ""]
+
+  for (const [index, result] of results.entries()) {
+    lines.push(`${index + 1}. [${result.title}](${result.url})`)
+    lines.push(`   ${result.content.length} chars via ${result.converter}`)
+  }
+
+  if (failures.length > 0) {
+    lines.push("", "## Failed URLs", "")
+    for (const failure of failures) {
+      lines.push(`- ${failure.url}: ${failure.error}`)
+    }
+  }
+
+  lines.push("", "Use get_search_content with responseId to read stored full content.")
+  return lines.join("\n")
 }
 
 // ── Extension ─────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
+    name: "web_search",
+    label: "Web Search",
+    description:
+      "Search the web via DuckDuckGo and return relevant result links. " +
+      "Use this to discover candidate URLs, then call web_fetch on promising results.",
+    promptSnippet:
+      "Search the web via DuckDuckGo; returns top result links as Markdown",
+    promptGuidelines: [
+      "Use web_search when the user asks you to search the web, find sources, or discover relevant pages before reading them.",
+      "Pass plain query text to web_search instead of constructing a DuckDuckGo URL by hand.",
+      "After web_search returns result links, call web_fetch on promising URLs to read full content.",
+    ],
+    parameters: Type.Object({
+      query: Type.String({
+        description: "Search query text.",
+      }),
+      maxResults: Type.Optional(
+        Type.Number({
+          description: `Maximum number of results to return (default ${DEFAULT_MAX_RESULTS}).`,
+          minimum: 1,
+          maximum: 10,
+        })
+      ),
+      domainFilter: Type.Optional(
+        Type.Array(
+          Type.String({
+            description: "Limit results to domains. Prefix with - to exclude a domain.",
+          })
+        )
+      ),
+    }),
+
+    async execute(_toolCallId, params, signal) {
+      const query = params.query.trim()
+      const maxResults = params.maxResults ?? DEFAULT_MAX_RESULTS
+      const domainFilter = params.domainFilter
+      const searchUrl = buildDuckDuckGoSearchUrl(query)
+      const result = await fetchDirect(searchUrl, signal ?? undefined)
+      const results = result.contentType.includes("text/html")
+        ? extractDuckDuckGoResultsFromHtml(result.text, { maxResults, domainFilter })
+        : filterSearchResults(extractDuckDuckGoResults(result.text, maxResults), domainFilter, maxResults)
+      const output = formatDuckDuckGoResults(query, results)
+      const responseId = storeWebResponse({
+        type: "search",
+        queries: [{ query, results }],
+      })
+
+      const details: Record<string, unknown> = {
+        query,
+        searchUrl,
+        status: result.status,
+        contentType: result.contentType,
+        results,
+        count: results.length,
+        domainFilter,
+        responseId,
+      }
+
+      return {
+        content: [{ type: "text", text: withResponseId(output, responseId) }],
+        details,
+      }
+    },
+  })
+
+  pi.registerTool({
     name: "web_fetch",
     label: "Web Fetch",
     description:
-      "Fetch a URL and return its content as Markdown. " +
+      "Fetch one or more URLs and return content as Markdown. " +
       "Automatically requests native Markdown from sites that support it " +
       "(e.g. Cloudflare Docs, many API documentation sites) via the " +
-      "`Accept: text/markdown` header. " +
-      "Use https://html.duckduckgo.com/html/?q=<query> to search the web.",
+      "`Accept: text/markdown` header.",
     promptSnippet:
-      "Fetch any URL or search the web via DuckDuckGo; returns Markdown",
+      "Fetch one or more URLs and return page content as Markdown",
     promptGuidelines: [
-      "Use web_fetch to search the web or read web pages when the user asks about current events, documentation, or anything that may require live information.",
-      "To search: fetch https://html.duckduckgo.com/html/?q=your+search+query (URL-encode spaces as +).",
-      "To read a page: fetch the URL directly. web_fetch automatically requests Markdown via content negotiation — documentation sites like Cloudflare Docs return clean native Markdown.",
-      "Search results include [title](url) links — call web_fetch again on promising URLs to read the full content.",
-      "Prefer targeted searches over broad ones; include relevant keywords to get better results.",
+      "Use web_fetch when you already have a specific URL and need to read its contents.",
+      "For web search or source discovery, use web_search first instead of constructing search URLs by hand.",
+      "web_fetch automatically requests Markdown via content negotiation — documentation sites like Cloudflare Docs often return clean native Markdown.",
+      "If a fetched page contains promising links, call web_fetch again on the specific URL you want to inspect.",
+      "Use a larger maxLength only when needed; otherwise keep responses small and targeted.",
     ],
     parameters: Type.Object({
-      url: Type.String({
-        description:
-          "URL to fetch. For web search use https://html.duckduckgo.com/html/?q=your+query",
-      }),
+      url: Type.Optional(
+        Type.String({
+          description: "Single URL to fetch.",
+        })
+      ),
+      urls: Type.Optional(
+        Type.Array(
+          Type.String({
+            description: "Multiple URLs to fetch.",
+          })
+        )
+      ),
       maxLength: Type.Optional(
         Type.Number({
           description: `Maximum characters to return (default ${DEFAULT_MAX_LENGTH}).`,
@@ -226,49 +355,207 @@ export default function (pi: ExtensionAPI) {
     }),
 
     async execute(_toolCallId, params, signal) {
-      const { url, maxLength = DEFAULT_MAX_LENGTH } = params
+      const maxLength = params.maxLength ?? DEFAULT_MAX_LENGTH
+      const targets = normalizeFetchTargets({ url: params.url, urls: params.urls })
 
-      const result = await fetchDirect(url, signal ?? undefined)
-      let text: string
-      let converter = "raw"
+      const settled = await Promise.allSettled(
+        targets.map((url) => fetchUrlAsMarkdown(url, signal ?? undefined))
+      )
+      const successes: FetchedUrlResult[] = []
+      const failures: Array<{ url: string; error: string }> = []
 
-      if (isBinaryContent(result.contentType, url)) {
-        // Binary document — delegate to markitdown
-        text = await runMarkitdown(url, signal ?? undefined)
-        converter = "markitdown"
-      } else if (
-        result.contentType.includes("text/markdown") ||
-        result.contentType.includes("text/plain")
-      ) {
-        // Native Markdown (or plain text) — use as-is
-        text = result.text
-        converter = "native"
-      } else if (result.contentType.includes("text/html")) {
-        // HTML — convert via node-html-markdown
-        text = htmlToMarkdown(result.text, url)
-        converter = "node-html-markdown"
-      } else {
-        // JSON, etc. — return raw
-        text = result.text
+      for (const [index, outcome] of settled.entries()) {
+        if (outcome.status === "fulfilled") {
+          successes.push(outcome.value)
+          continue
+        }
+
+        const reason = outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason)
+        failures.push({ url: targets[index], error: reason })
       }
 
-      const truncated = text.length > maxLength
-      const output = truncated ? text.slice(0, maxLength) : text
-      const suffix = truncated
-        ? `\n\n[Content truncated at ${maxLength} chars — ${text.length} total. ` +
-          `Call web_fetch again with a larger maxLength or fetch a specific section.]`
-        : ""
+      if (successes.length === 0) {
+        const firstFailure = failures[0]
+        throw new Error(firstFailure?.error ?? "Failed to fetch URL")
+      }
 
-      return {
-        content: [{ type: "text", text: output + suffix }],
-        details: {
-          url,
+      const responseId = storeWebResponse({
+        type: "fetch",
+        urls: successes.map((result) => ({
+          url: result.url,
+          title: result.title,
+          content: result.content,
+        })),
+      })
+
+      if (successes.length === 1 && failures.length === 0) {
+        const [result] = successes
+        const truncated = result.content.length > maxLength
+        const output = truncated ? result.content.slice(0, maxLength) : result.content
+        const suffix = truncated
+          ? `\n\n[Content truncated at ${maxLength} chars — ${result.content.length} total. ` +
+            `Call web_fetch again with a larger maxLength or fetch a specific section.]`
+          : ""
+
+        const details: Record<string, unknown> = {
+          url: result.url,
           status: result.status,
           contentType: result.contentType,
-          converter,
-          length: text.length,
+          converter: result.converter,
+          length: result.content.length,
           truncated,
-        },
+          responseId,
+        }
+
+        return {
+          content: [{ type: "text", text: withResponseId(output + suffix, responseId) }],
+          details,
+        }
+      }
+
+      const details: Record<string, unknown> = {
+        urls: targets,
+        fetchedCount: successes.length,
+        failedCount: failures.length,
+        failures,
+        responseId,
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: withResponseId(formatMultiFetchSummary(successes, failures), responseId),
+        }],
+        details,
+      }
+    },
+  })
+
+  pi.registerTool({
+    name: "get_search_content",
+    label: "Get Search Content",
+    description:
+      "Retrieve full content from a previous web_search or web_fetch call via responseId.",
+    promptSnippet:
+      "Use after web_search/web_fetch when stored full content is needed by responseId.",
+    parameters: Type.Object({
+      responseId: Type.String({
+        description: "responseId returned from web_search or web_fetch.",
+      }),
+      query: Type.Optional(
+        Type.String({
+          description: "Query to retrieve from stored web_search results.",
+        })
+      ),
+      queryIndex: Type.Optional(
+        Type.Number({
+          description: "Query index to retrieve from stored web_search results.",
+          minimum: 0,
+        })
+      ),
+      url: Type.Optional(
+        Type.String({
+          description: "URL to retrieve from stored web_fetch results.",
+        })
+      ),
+      urlIndex: Type.Optional(
+        Type.Number({
+          description: "URL index to retrieve from stored web_fetch results.",
+          minimum: 0,
+        })
+      ),
+    }),
+
+    async execute(_toolCallId, params) {
+      const stored = getWebResponse(params.responseId)
+      if (!stored) {
+        const details: Record<string, unknown> = {
+          responseId: params.responseId,
+          error: "Not found",
+        }
+
+        return {
+          content: [{ type: "text", text: `No stored response found for ${params.responseId}.` }],
+          details,
+        }
+      }
+
+      if (stored.type === "search") {
+        let queryData: StoredSearchQuery | undefined
+
+        if (typeof params.query === "string") {
+          queryData = stored.queries.find((item) => item.query === params.query)
+        } else if (typeof params.queryIndex === "number") {
+          queryData = stored.queries[params.queryIndex]
+        } else if (stored.queries.length === 1) {
+          queryData = stored.queries[0]
+        }
+
+        if (!queryData) {
+          const available = stored.queries.map((item, index) => `${index}: ${item.query}`).join("\n")
+          const details: Record<string, unknown> = {
+            responseId: params.responseId,
+            error: "Missing or invalid query selector",
+          }
+
+          return {
+            content: [{
+              type: "text",
+              text: `Stored search response requires query or queryIndex. Available queries:\n${available}`,
+            }],
+            details,
+          }
+        }
+
+        const details: Record<string, unknown> = {
+          responseId: params.responseId,
+          type: stored.type,
+          query: queryData.query,
+          resultCount: queryData.results.length,
+        }
+
+        return {
+          content: [{ type: "text", text: formatStoredSearchQuery(queryData) }],
+          details,
+        }
+      }
+
+      let urlData: StoredFetchContent | undefined
+      if (typeof params.url === "string") {
+        urlData = stored.urls.find((item) => item.url === params.url)
+      } else if (typeof params.urlIndex === "number") {
+        urlData = stored.urls[params.urlIndex]
+      } else if (stored.urls.length === 1) {
+        urlData = stored.urls[0]
+      }
+
+      if (!urlData) {
+        const available = stored.urls.map((item, index) => `${index}: ${item.url}`).join("\n")
+        const details: Record<string, unknown> = {
+          responseId: params.responseId,
+          error: "Missing or invalid url selector",
+        }
+
+        return {
+          content: [{
+            type: "text",
+            text: `Stored fetch response requires url or urlIndex. Available URLs:\n${available}`,
+          }],
+          details,
+        }
+      }
+
+      const details: Record<string, unknown> = {
+        responseId: params.responseId,
+        type: stored.type,
+        url: urlData.url,
+        title: urlData.title,
+        length: urlData.content.length,
+      }
+
+      return {
+        content: [{ type: "text", text: formatStoredFetchContent(urlData) }],
+        details,
       }
     },
   })
