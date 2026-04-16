@@ -52,9 +52,9 @@
       "sourceType": "github",
       "sourceUrl": "https://github.com/vercel-labs/agent-browser.git",
       "skillPath": "skills/agent-browser/SKILL.md",
-      "skillFolderHash": "2406f5d1c14a6727a0b628bf84e7485e0f76f8de",
+      "skillFolderHash": "67d654a553c1bd21b4cff0d9d61d75cd9a67e635",
       "installedAt": "2026-03-25T17:47:43.301Z",
-      "updatedAt": "2026-03-28T15:15:20.650Z"
+      "updatedAt": "2026-04-16T02:08:17.114Z"
     },
     "find-skills": {
       "source": "vercel-labs/skills",
@@ -99,9 +99,9 @@
       "sourceType": "github",
       "sourceUrl": "https://github.com/shadcn/ui.git",
       "skillPath": "skills/shadcn/SKILL.md",
-      "skillFolderHash": "bf9e83da91320f445f2c27f65067009f344f757a",
+      "skillFolderHash": "a7903e883aaeead6ed509468b499310729968ad9",
       "installedAt": "2026-03-25T17:52:27.674Z",
-      "updatedAt": "2026-03-25T17:52:27.674Z"
+      "updatedAt": "2026-04-16T02:09:26.584Z"
     },
     "software-design-philosophy": {
       "source": "luoling8192/software-design-philosophy-skill",
@@ -135,9 +135,9 @@
       "sourceType": "github",
       "sourceUrl": "https://github.com/vercel-labs/agent-skills.git",
       "skillPath": "skills/react-best-practices/SKILL.md",
-      "skillFolderHash": "bd8feeee219216aac928d1d8e5c61a928dba23dc",
+      "skillFolderHash": "343db72180d05814949fef7d46be96b5c6ee86b3",
       "installedAt": "2026-03-25T17:54:34.640Z",
-      "updatedAt": "2026-03-25T17:54:34.640Z"
+      "updatedAt": "2026-04-16T02:09:29.839Z"
     },
     "vercel-composition-patterns": {
       "source": "vercel-labs/agent-skills",
@@ -153,9 +153,9 @@
       "sourceType": "github",
       "sourceUrl": "https://github.com/microsoft/playwright-cli.git",
       "skillPath": "skills/playwright-cli/SKILL.md",
-      "skillFolderHash": "a45a2cf6381af0007a8d88d3b95f798565ffc5a5",
+      "skillFolderHash": "b901dcc64256dbb1b32744975a0bafaeb4478da5",
       "installedAt": "2026-04-07T12:55:18.151Z",
-      "updatedAt": "2026-04-07T12:55:18.151Z"
+      "updatedAt": "2026-04-16T02:09:32.716Z"
     },
     "feishu-create-doc": {
       "source": "larksuite/openclaw-lark",
@@ -183,6 +183,76 @@
       "skillFolderHash": "16eca0a12aefb6d5c96de3a688743882087e9986",
       "installedAt": "2026-04-14T04:05:10.783Z",
       "updatedAt": "2026-04-14T04:05:10.783Z"
+    },
+    "alerting-irm": {
+      "source": "grafana/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/grafana/skills.git",
+      "skillPath": "skills/grafana-core/alerting-irm/SKILL.md",
+      "skillFolderHash": "6ce7265fdb80bfb5b8a92378e7c32c1fec6d4290",
+      "pluginName": "grafana-core",
+      "installedAt": "2026-04-16T02:06:38.591Z",
+      "updatedAt": "2026-04-16T02:06:38.591Z"
+    },
+    "alloy": {
+      "source": "grafana/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/grafana/skills.git",
+      "skillPath": "skills/grafana-core/alloy/SKILL.md",
+      "skillFolderHash": "e95c62fdfd5f162d4a58acac28dd86512947cc47",
+      "pluginName": "grafana-core",
+      "installedAt": "2026-04-16T02:06:39.098Z",
+      "updatedAt": "2026-04-16T02:06:39.098Z"
+    },
+    "beyla": {
+      "source": "grafana/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/grafana/skills.git",
+      "skillPath": "skills/grafana-core/beyla/SKILL.md",
+      "skillFolderHash": "2bf7d55f143c308d8d35e35a4e5ed365c1295864",
+      "pluginName": "grafana-core",
+      "installedAt": "2026-04-16T02:06:39.614Z",
+      "updatedAt": "2026-04-16T02:06:39.614Z"
+    },
+    "dashboarding": {
+      "source": "grafana/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/grafana/skills.git",
+      "skillPath": "skills/grafana-core/dashboarding/SKILL.md",
+      "skillFolderHash": "24940db4fc5cbf67ed219de9f8855f2510c82436",
+      "pluginName": "grafana-core",
+      "installedAt": "2026-04-16T02:06:40.126Z",
+      "updatedAt": "2026-04-16T02:06:40.126Z"
+    },
+    "grafana-oss": {
+      "source": "grafana/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/grafana/skills.git",
+      "skillPath": "skills/grafana-core/grafana-oss/SKILL.md",
+      "skillFolderHash": "c2bff76853a2adb39774a36560919287ee193bd1",
+      "pluginName": "grafana-core",
+      "installedAt": "2026-04-16T02:06:40.635Z",
+      "updatedAt": "2026-04-16T02:06:40.635Z"
+    },
+    "opentelemetry": {
+      "source": "grafana/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/grafana/skills.git",
+      "skillPath": "skills/grafana-core/opentelemetry/SKILL.md",
+      "skillFolderHash": "88b1c089a5e0dfad4b7aa0bacc8261cde0bd451f",
+      "pluginName": "grafana-core",
+      "installedAt": "2026-04-16T02:06:41.203Z",
+      "updatedAt": "2026-04-16T02:06:41.203Z"
+    },
+    "promql": {
+      "source": "grafana/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/grafana/skills.git",
+      "skillPath": "skills/grafana-core/promql/SKILL.md",
+      "skillFolderHash": "6f529ce21330feaedf6705fa96001056447639ea",
+      "pluginName": "grafana-core",
+      "installedAt": "2026-04-16T02:06:41.728Z",
+      "updatedAt": "2026-04-16T02:06:41.728Z"
     }
   },
   "dismissed": {

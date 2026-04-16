@@ -564,14 +564,20 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 		if (!reviewOriginId || !ctx.hasUI) return;
 
 		const choice = await ctx.ui.select("审查完成，下一步？", [
-			"修复问题（继续在当前 branch 操作）",
+			"修复所有问题",
+			"继续（自由输入）",
 			"返回主 session（/end-review）",
 		]);
 
-		if (choice?.startsWith("修复")) {
+		if (choice === "修复所有问题") {
 			pi.sendUserMessage(
 				"请修复上述审查中发现的所有 P0、P1、P2 问题。每修复一个问题后简要说明改了什么。",
 			);
+		} else if (choice === "继续（自由输入）") {
+			const input = await ctx.ui.input("输入你的指示：");
+			if (input?.trim()) {
+				pi.sendUserMessage(input.trim());
+			}
 		} else {
 			ctx.ui.notify("输入 /end-review 返回主 session", "info");
 		}
