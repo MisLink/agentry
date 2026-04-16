@@ -60,9 +60,10 @@ agentry/
 - 编译目标由 `tsconfig.json` 决定；开发时使用 `typescript ^6`
 
 ### Skills
-- Skills 存放在 `agents/.agents/skills/` 和 `claude/.claude/skills/`
+- `skills/` 是本仓库内 skill 的**唯一源码目录（source of truth）**；修改 skill 时只编辑 `skills/<name>/...`
 - 每个 skill 有 `SKILL.md` 描述触发条件和使用规范
-- `skills/vcs-commit/SKILL.md` 是 source，stow 后链接到 `~/.agents/skills/vcs-commit/SKILL.md`
+- **不要**直接修改 `agents/.agents/skills/`、`claude/.claude/skills/`、`$HOME/.agents/skills/` 或其他已安装目标路径中的 skill 文件
+- 如需安装到目标路径，先修改 `skills/` 下源码，再通过你的安装流程（如 `npx skills add ...` / package / stow）同步过去
 
 ### 代码风格
 - 扩展代码使用 TypeScript，文件顶部有 JSDoc 描述命令和功能

@@ -1,9 +1,9 @@
-.PHONY: install uninstall decrypt
+.PHONY: install uninstall decrypt skills
 default: install
 
 STOW_DIRS := $(filter-out pi-package/ node_modules/ skills/, $(wildcard */))
 
-install: decrypt
+install: decrypt skills
 	stow --target=$(HOME) -v -R $(STOW_DIRS)
 
 uninstall:
@@ -16,3 +16,6 @@ $(decrypted_files): %.json: %.enc.json
 	sops decrypt --output $@ $<
 
 decrypt: $(decrypted_files)
+
+skills:
+	npx skills add ./skills/ --skills '*' -y -g

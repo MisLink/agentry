@@ -60,16 +60,20 @@ If the changes span multiple unrelated concerns, offer to help the user split th
 
 ### Splitting in a jj repo
 
-Use `jj split` to interactively divide the current change:
+**Do not use interactive terminal flows for splitting.** The agent cannot reliably operate TUI/editor prompts such as bare `jj split` that open an interactive diff selector.
+
+Prefer non-interactive, file-based splits:
 
 ```bash
 # Split by specific files (non-interactive — good when concerns map cleanly to files)
-jj split src/auth.js        # first change gets only src/auth.js; rest stays in a new change
-jj split src/auth.js src/auth.test.js   # multiple files
-
-# Interactive split (hunk-level granularity)
-jj split                    # opens a diff editor to select hunks
+jj split src/auth.js
+jj split src/auth.js src/auth.test.js
 ```
+
+If the split requires selecting individual hunks within the same file, don't attempt an interactive shell session. Instead, explain the limitation and ask the user to either:
+- split it manually, or
+- accept a single commit, or
+- help reorganize the file changes first so they can be split cleanly by file.
 
 After splitting, describe each change separately:
 ```bash
@@ -84,7 +88,7 @@ Or use `jj log` to find the change IDs and describe them in any order.
 
 ### Splitting in a git repo
 
-Use selective staging to split into separate commits:
+Use non-interactive selective staging to split into separate commits:
 
 ```bash
 # Stage only the files for the first commit
@@ -96,10 +100,9 @@ git add README.md
 git commit -m "docs: 更新 changelog"
 ```
 
-For hunk-level splits:
-```bash
-git add -p src/auth.js    # interactively select hunks within a file
-```
+**Do not use interactive patch mode** such as `git add -p` or other commands that expect terminal interaction. The agent cannot reliably drive interactive shell prompts.
+
+If the split requires hunk-level selection within the same file, explain the limitation and ask the user to either split it manually or approve a single combined commit.
 
 ### When to suggest splitting
 
@@ -109,6 +112,15 @@ Suggest splitting (and offer to guide through it) when:
 - The user says "separate commits" or "split this"
 
 Don't over-split — if the changes are small and naturally related, a single commit is fine.
+
+### Interactive-shell restriction
+
+When helping with commit splitting, **never** enter interactive shell/TUI flows such as:
+- `jj split` without file arguments
+- `git add -p`
+- editors or pagers that require manual keypresses to proceed
+
+Prefer deterministic, non-interactive commands. If an interactive flow would be required, stop and ask the user for a different approach.
 
 ## Step 4: Generate the Commit Message
 
