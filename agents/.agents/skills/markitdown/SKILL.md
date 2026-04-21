@@ -75,26 +75,27 @@ markitdown <path-or-url> -o /tmp/output.md
 cat document.pdf | markitdown -x .pdf
 ```
 
-## When to Use This vs web_fetch
+## When to Use This vs web_search / web_fetch
 
-Both tools can fetch URLs, but they have different strengths:
+These tools overlap a bit, but each has a clearer primary role:
 
 | Scenario | Recommended | Why |
 |----------|-------------|-----|
-| Quick web search (DuckDuckGo) | `web_fetch` | Built-in, instant |
+| Quick web search (DuckDuckGo) | `web_search` | Built-in, query-based search tool |
 | Regular web page (first attempt) | `web_fetch` | Faster, does content negotiation |
 | Regular web page (web_fetch output was noisy) | `markitdown` | Different HTML parser, may produce cleaner results |
-| **PDF, DOCX, PPTX, XLSX** (local or URL) | `markitdown` | web_fetch can't parse these (auto-falls back to markitdown for URLs) |
+| **PDF, DOCX, PPTX, XLSX** (local or URL) | `markitdown` | web_fetch can't parse these directly (auto-falls back to markitdown for supported URLs) |
 | YouTube video transcript | `markitdown` | Extracts transcript + metadata |
 | RSS feed | `markitdown` | Native RSS support |
 | Wikipedia article | Either | markitdown often gives cleaner output |
 | Local file on disk | `markitdown` | web_fetch is URL-only |
 
 **Decision flow:**
-1. URL? Try `web_fetch` first (faster).
-2. web_fetch output noisy or binary content? Use `markitdown`.
-3. Local file? Use `markitdown` (only option).
-4. YouTube / RSS / special source? Use `markitdown` directly.
+1. Need web search / source discovery? Use `web_search`.
+2. Already have specific URL? Try `web_fetch` first.
+3. web_fetch output noisy or binary content? Use `markitdown`.
+4. Local file? Use `markitdown` (only option).
+5. YouTube / RSS / special source? Use `markitdown` directly.
 
 ## Caveats
 
