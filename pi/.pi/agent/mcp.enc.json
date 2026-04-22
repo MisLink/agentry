@@ -5,9 +5,6 @@
 		},
 		"grafana-mcp": {
 			"url": "ENC[AES256_GCM,data:gxHhLUhN/QC6N9nalWm0Y6khAsbjN4mU,iv:lKF+QW7nuqqntEbxWIrIhVvoaV8M/vfAjpTqVUPWLBg=,tag:y2aF9MHOSV3IdOoWH6dbpw==,type:str]"
-		},
-		"dash-api": {
-			"url": "ENC[AES256_GCM,data:5P1i1Zts/rFgDwY3QvtOsCz2GaBqaFpnxyotu1A=,iv:dZcpq0D4qRMzlVnrf0IjGk/qW1LUpffvcHn0Tj2rPnk=,tag:Ww+Ywth8cTESBI1zTBJuYw==,type:str]"
 		}
 	},
 	"sops": {
@@ -17,8 +14,8 @@
 				"enc": "-----BEGIN AGE ENCRYPTED FILE-----\nYWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IHNzaC1lZDI1NTE5IFFCNGJlZyBpVnp2\nOTFNejMvZmJ4a0dieVlxS0EvTTdZeXd4enArS3Z3d1MyV1JINGtBCk1JMVRQQUpC\nMjlmYkxDSHFMRDlZcXhGNEU5TjdnMnEvb3IrZUpuaC9XVDgKLS0tIGVITUVlaTMz\nUEJPUGVWK2ltWk5Ia2xKdk9ZV0FyTkpEQzlyUVJRZUlySVEKJDb1pq+QtuGRW2zB\nQGk19cjQ6g8XwmCYAILSwoSKy50a6BQ405CVwtONGI4FU7WjtdU3pTEgZn5CJjfM\nHaO4WQ==\n-----END AGE ENCRYPTED FILE-----\n"
 			}
 		],
-		"lastmodified": "2026-04-21T12:25:43Z",
-		"mac": "ENC[AES256_GCM,data:sjYKM5tYDryGI0umPopPrtne3Ytip2kN4uFDyqQIyhYrR2kUmjOBLasl2TSG+6vR/hTKcapim5T4XHdB9UVAwIVtbRTZciiUF/XbmQbi9bkJSPa+9i8sZrpHrV34JO6NpUP1QrRgE8uXRdZoW9PC/Zp5Q9ELHF+yqUiC/cKW7W8=,iv:gvJsIFX7IJLM+rAU2SEL4PngRvr70SpgmtXfXmBDwaY=,tag:Ii8zPar4hIiIP1mPyARrsQ==,type:str]",
+		"lastmodified": "2026-04-22T03:42:56Z",
+		"mac": "ENC[AES256_GCM,data:W55GkL2ViAE+D++Bp30cqV/dnwIOwt9u1DmXCCFSM6CgMeSrfvyLt/FrAPrKvXUwLN753Gp8rNbsm/GjsyFkUaXOn2knsGE7zpBn7/4hlkgovedA879gg91nfNB+5UwuA90KWp3SVtj2bPcn+F94xe1ysoskdPP2mXL9ApRQe7s=,iv:GjZwdUZWK+C6HeOcz9wQ39O8DN2k7/yHQaMcT5ZbqSA=,tag:YC8BZUptTAd0Ftv6m0Y84w==,type:str]",
 		"unencrypted_suffix": "_unencrypted",
 		"version": "3.12.2"
 	}
