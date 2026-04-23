@@ -262,6 +262,16 @@
       "skillFolderHash": "825e13085d1515fe67881b2123f3bf9b34c26154",
       "installedAt": "2026-04-18T09:59:03.070Z",
       "updatedAt": "2026-04-18T09:59:03.070Z"
+    },
+    "mcp-builder": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/anthropics/skills.git",
+      "skillPath": "skills/mcp-builder/SKILL.md",
+      "skillFolderHash": "b866bcfb57b780c10b587c7b543e871a91661ce0",
+      "pluginName": "example-skills",
+      "installedAt": "2026-04-23T10:05:01.434Z",
+      "updatedAt": "2026-04-23T10:05:01.434Z"
     }
   },
   "dismissed": {
