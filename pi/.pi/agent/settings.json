@@ -5,8 +5,8 @@
   "defaultThinkingLevel": "high",
   "packages": [
     "~/projects/agentry",
-    "git:github.com/nicobailon/pi-mcp-adapter@v2.4.0",
-    "git:github.com/davebcn87/pi-autoresearch@main"
+    "git:github.com/nicobailon/pi-mcp-adapter@v2.5.1",
+    "git:github.com/davebcn87/pi-autoresearch@v1.1.0"
   ],
   "hideThinkingBlock": false,
   "theme": "dark",
