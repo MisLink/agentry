@@ -79,6 +79,7 @@ let reviewOriginId: string | undefined = undefined;
 let preReviewModelRef: string | undefined = undefined;
 let reviewTargetLabel: string | undefined = undefined;
 let reviewStartedAtMs: number | undefined = undefined;
+let reviewCompletedTotalMs: number | undefined = undefined;
 let currentReviewTargetKey: string | undefined = undefined;
 let currentReviewContext: ReviewContext | undefined = undefined;
 let latestReviewCommandCtx: ExtensionCommandContext | undefined = undefined;
@@ -94,6 +95,7 @@ type ReviewSessionState = {
 	originId?: string;
 	targetLabel?: string;
 	startedAtMs?: number;
+	completedTotalMs?: number;
 	targetKey?: string;
 };
 
@@ -639,10 +641,13 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 			ctx.ui.setWidget("review", undefined);
 			return false;
 		}
+		const isComplete = reviewCompletedTotalMs !== undefined;
+		const nowMs = Date.now();
 		const msg = buildReviewWidgetLine({
 			targetLabel: reviewTargetLabel,
-			startedAtMs: reviewStartedAtMs ?? Date.now(),
-			nowMs: Date.now(),
+			startedAtMs: reviewStartedAtMs ?? nowMs,
+			nowMs: isComplete ? (reviewStartedAtMs ?? 0) + reviewCompletedTotalMs! : nowMs,
+			isComplete,
 		});
 		ctx.ui.setWidget("review", (_tui, theme) => ({
 			render: (width: number) => [theme.fg("warning", msg).slice(0, width)],
@@ -704,6 +709,9 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 	function formatReviewStatus(): string {
 		if (!reviewOriginId) return "当前没有进行中的 review";
 		const target = reviewTargetLabel ?? "未知目标";
+		if (reviewCompletedTotalMs !== undefined) {
+			return `review 已完成：${target}，耗时 ${formatElapsed(0, reviewCompletedTotalMs)}`;
+		}
 		return `review 进行中：${target}，已运行 ${formatElapsed(reviewStartedAtMs ?? Date.now())}`;
 	}
 
@@ -717,6 +725,7 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 		reviewOriginId = undefined;
 		reviewTargetLabel = undefined;
 		reviewStartedAtMs = undefined;
+		reviewCompletedTotalMs = undefined;
 		currentReviewTargetKey = undefined;
 		currentReviewContext = undefined;
 		latestReviewCommandCtx = undefined;
@@ -864,6 +873,7 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 			originId: reviewOriginId,
 			targetLabel: reviewTargetLabel,
 			startedAtMs: reviewStartedAtMs,
+			completedTotalMs: undefined,
 			targetKey: currentReviewTargetKey,
 		} satisfies ReviewSessionState);
 
@@ -955,22 +965,22 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 			} satisfies ReviewResultState);
 		}
 
-		const returnChoice = canNavigateTree(ctx) || latestReviewCommandCtx
-			? "退出 review，返回主 session"
-			: "结束 review 状态";
-		const choice = await notifyBeforePrompt(
-			"审查完成，下一步？",
-			() => ctx.ui.select("审查完成，下一步？", [
-				"继续（自由输入）",
-				returnChoice,
-			]),
-		);
+		// Review complete — stay in fork thread. User types instructions to fix,
+		// or uses /review off to exit.
 
-		if (choice === "继续（自由输入）") {
-			const input = await notifyBeforePrompt("输入你的指示：", () => ctx.ui.input("输入你的指示："));
-			if (input?.trim()) pi.sendUserMessage(input.trim());
-		} else {
-			await finishReviewSession(ctx);
+		// Halt timer — only count LLM duration, not post-review idle
+		if (reviewCompletedTotalMs === undefined) {
+			reviewCompletedTotalMs = Date.now() - (reviewStartedAtMs ?? Date.now());
+			stopReviewWidgetTimer();
+			renderReviewWidget(ctx);
+			pi.appendEntry(REVIEW_STATE_TYPE, {
+				active: true,
+				originId: reviewOriginId,
+				targetLabel: reviewTargetLabel,
+				startedAtMs: reviewStartedAtMs,
+				completedTotalMs: reviewCompletedTotalMs,
+				targetKey: currentReviewTargetKey,
+			} satisfies ReviewSessionState);
 		}
 	});
 
@@ -986,6 +996,7 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 			reviewOriginId = lastState.originId;
 			reviewTargetLabel = lastState.targetLabel;
 			reviewStartedAtMs = lastState.startedAtMs ?? Date.now();
+			reviewCompletedTotalMs = lastState.completedTotalMs;
 			currentReviewTargetKey = lastState.targetKey;
 			currentReviewContext = undefined;
 			latestReviewCommandCtx = undefined;
@@ -994,6 +1005,7 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 			reviewOriginId = undefined;
 			reviewTargetLabel = undefined;
 			reviewStartedAtMs = undefined;
+			reviewCompletedTotalMs = undefined;
 			currentReviewTargetKey = undefined;
 			currentReviewContext = undefined;
 			latestReviewCommandCtx = undefined;
