@@ -76,7 +76,8 @@ async function detectVCS(pi: ExtensionAPI): Promise<"git" | "jj"> {
 // ─── State ───────────────────────────────────────────────────────────────────
 
 let reviewOriginId: string | undefined = undefined;
-let preReviewModelRef: string | undefined = undefined;
+let preReviewModel: import("@mariozechner/pi-ai").Model<Api> | null | undefined = undefined;
+// undefined = not in review; null = was in review but original had no model; Model = original model to restore
 let reviewTargetLabel: string | undefined = undefined;
 let reviewStartedAtMs: number | undefined = undefined;
 let reviewCompletedTotalMs: number | undefined = undefined;
@@ -692,11 +693,11 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 		const selectedModel = await selectReviewModel(ctx);
 		if (!selectedModel) return false;
 		if (ctx.model && selectedModel.provider === ctx.model.provider && selectedModel.id === ctx.model.id) return true;
-		preReviewModelRef = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+		preReviewModel = ctx.model ?? null;
 		const success = await pi.setModel(selectedModel);
 		if (!success) {
 			ctx.ui.notify(`无法切换到 ${selectedModel.provider}/${selectedModel.id}：模型未配置可用凭据`, "error");
-			preReviewModelRef = undefined;
+			preReviewModel = undefined;
 			return false;
 		}
 		return true;
@@ -732,12 +733,10 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 		pi.appendEntry(REVIEW_STATE_TYPE, { active: false } satisfies ReviewSessionState);
 		clearReviewWidget(ctx);
 
-		if (preReviewModelRef) {
-			const [provider, modelId] = preReviewModelRef.split("/");
-			const original = ctx.modelRegistry.find(provider, modelId);
-			if (original) await pi.setModel(original);
-			preReviewModelRef = undefined;
+		if (preReviewModel) {
+			await pi.setModel(preReviewModel);
 		}
+		preReviewModel = undefined;
 
 		if (navigationCtx && canNavigateTree(navigationCtx)) {
 			await navigationCtx.navigateTree(originId);
@@ -909,10 +908,15 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 		},
 	});
 
-	pi.on("session_shutdown", (_event, ctx) => {
+	pi.on("session_shutdown", async (_event, ctx) => {
 		clearReviewWidget(ctx);
 		currentReviewContext = undefined;
 		latestReviewCommandCtx = undefined;
+		// Restore model if review was active and model was changed
+		if (preReviewModel) {
+			await pi.setModel(preReviewModel);
+		}
+		preReviewModel = undefined;
 	});
 
 	pi.on("before_agent_start", async (_event, ctx) => {

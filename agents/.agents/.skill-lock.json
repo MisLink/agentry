@@ -70,9 +70,9 @@
       "sourceType": "github",
       "sourceUrl": "https://github.com/anthropics/skills.git",
       "skillPath": "skills/claude-api/SKILL.md",
-      "skillFolderHash": "6d12d690ffa6b91119e932e448f4437d9f197a53",
+      "skillFolderHash": "284049f382b3c2b1989353637e0b3848dad0f09f",
       "installedAt": "2026-03-25T17:51:48.804Z",
-      "updatedAt": "2026-04-26T15:34:46.785Z"
+      "updatedAt": "2026-05-05T10:21:36.406Z"
     },
     "skill-creator": {
       "source": "anthropics/skills",
@@ -83,23 +83,14 @@
       "installedAt": "2026-03-25T17:51:49.303Z",
       "updatedAt": "2026-04-26T15:34:52.294Z"
     },
-    "onevcat-jj": {
-      "source": "onevcat/skills",
-      "sourceType": "github",
-      "sourceUrl": "https://github.com/onevcat/skills.git",
-      "skillPath": "skills/onevcat-jj/SKILL.md",
-      "skillFolderHash": "d078a9a9557dde921f5e8ee8d1f62c89a304aec6",
-      "installedAt": "2026-03-25T17:52:08.486Z",
-      "updatedAt": "2026-03-25T17:52:08.486Z"
-    },
     "shadcn": {
       "source": "shadcn/ui",
       "sourceType": "github",
       "sourceUrl": "https://github.com/shadcn/ui.git",
       "skillPath": "skills/shadcn/SKILL.md",
-      "skillFolderHash": "39a241ae2b522ccb686d4d7064ca61e68dbf3794",
+      "skillFolderHash": "a8404703769866faf15bee897c9ae6e252ac2d35",
       "installedAt": "2026-03-25T17:52:27.674Z",
-      "updatedAt": "2026-04-26T15:35:05.009Z"
+      "updatedAt": "2026-05-05T10:21:47.480Z"
     },
     "software-design-philosophy": {
       "source": "luoling8192/software-design-philosophy-skill",
@@ -151,9 +142,9 @@
       "sourceType": "github",
       "sourceUrl": "https://github.com/microsoft/playwright-cli.git",
       "skillPath": "skills/playwright-cli/SKILL.md",
-      "skillFolderHash": "e065db5c5c0a7b197cdbcb1e70c9b374f80a7c91",
+      "skillFolderHash": "ff92cdde57ecce01607406a4667dc0f2772dfac1",
       "installedAt": "2026-04-07T12:55:18.151Z",
-      "updatedAt": "2026-04-26T15:35:10.077Z"
+      "updatedAt": "2026-05-05T10:21:52.140Z"
     },
     "feishu-create-doc": {
       "source": "larksuite/openclaw-lark",
@@ -257,9 +248,9 @@
       "sourceType": "github",
       "sourceUrl": "https://github.com/JuliusBrussee/caveman.git",
       "skillPath": "caveman/SKILL.md",
-      "skillFolderHash": "825e13085d1515fe67881b2123f3bf9b34c26154",
+      "skillFolderHash": "f524c391d466fe35e0bdbe9707854fcb2be52b26",
       "installedAt": "2026-04-18T09:59:03.070Z",
-      "updatedAt": "2026-04-18T09:59:03.070Z"
+      "updatedAt": "2026-05-05T10:21:56.456Z"
     },
     "mcp-builder": {
       "source": "anthropics/skills",
@@ -282,6 +273,7 @@
     "codex",
     "cursor",
     "deepagents",
+    "dexto",
     "firebender",
     "gemini-cli",
     "github-copilot",
