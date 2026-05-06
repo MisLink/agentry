@@ -29,24 +29,6 @@
       "installedAt": "2026-03-17T17:38:11.234Z",
       "updatedAt": "2026-03-25T17:53:49.024Z"
     },
-    "ai-coding-discipline": {
-      "source": "luoling8192/ai-coding-principles",
-      "sourceType": "github",
-      "sourceUrl": "https://github.com/luoling8192/ai-coding-principles.git",
-      "skillPath": "ai-coding-discipline/SKILL.md",
-      "skillFolderHash": "83302c031bde408134f611f5700d0f1df3b9e051",
-      "installedAt": "2026-03-25T16:11:03.251Z",
-      "updatedAt": "2026-03-25T17:49:26.974Z"
-    },
-    "ddia-principles": {
-      "source": "luoling8192/ai-coding-principles",
-      "sourceType": "github",
-      "sourceUrl": "https://github.com/luoling8192/ai-coding-principles.git",
-      "skillPath": "ddia-principles/SKILL.md",
-      "skillFolderHash": "92abd55236470c16f7a4a9b0dd5a2940cdb1857f",
-      "installedAt": "2026-03-25T16:11:03.791Z",
-      "updatedAt": "2026-03-25T17:49:27.495Z"
-    },
     "agent-browser": {
       "source": "vercel-labs/agent-browser",
       "sourceType": "github",
@@ -92,15 +74,6 @@
       "installedAt": "2026-03-25T17:52:27.674Z",
       "updatedAt": "2026-05-05T10:21:47.480Z"
     },
-    "software-design-philosophy": {
-      "source": "luoling8192/software-design-philosophy-skill",
-      "sourceType": "github",
-      "sourceUrl": "https://github.com/luoling8192/software-design-philosophy-skill.git",
-      "skillPath": "SKILL.md",
-      "skillFolderHash": "e55ac385e89913a6d53c7da460d080982d32ea03",
-      "installedAt": "2026-03-25T17:52:43.265Z",
-      "updatedAt": "2026-03-25T17:52:43.265Z"
-    },
     "tailwind-design-system": {
       "source": "wshobson/agents",
       "sourceType": "github",
@@ -109,15 +82,6 @@
       "skillFolderHash": "a8532caa4b6284a92c686bc9346c274e6e66aaa5",
       "installedAt": "2026-03-25T17:53:02.387Z",
       "updatedAt": "2026-03-28T15:15:32.547Z"
-    },
-    "test-driven-development": {
-      "source": "obra/superpowers",
-      "sourceType": "github",
-      "sourceUrl": "https://github.com/obra/superpowers.git",
-      "skillPath": "skills/test-driven-development/SKILL.md",
-      "skillFolderHash": "98904a7d8e0e04b9bd46220b9b17298f45fe0b72",
-      "installedAt": "2026-03-25T17:53:23.283Z",
-      "updatedAt": "2026-03-25T17:53:23.283Z"
     },
     "vercel-react-best-practices": {
       "source": "vercel-labs/agent-skills",
