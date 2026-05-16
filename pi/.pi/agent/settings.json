@@ -1,20 +1,9 @@
 {
-  "lastChangelogVersion": "0.74.0",
   "defaultProvider": "github-copilot",
   "defaultModel": "claude-sonnet-4.6",
+  "lastChangelogVersion": "0.74.1",
   "defaultThinkingLevel": "high",
   "packages": [
-    "git:github.com/nicobailon/pi-mcp-adapter",
-    "git:github.com/davebcn87/pi-autoresearch",
-    "git:github.com/eko24ive/pi-ask",
-    "git:github.com/nicobailon/pi-web-access",
-    {
-      "source": "git:github.com/championswimmer/pi-context-usage",
-      "skills": [
-        "-.agents/skills/planning/SKILL.md",
-        "-.agents/skills/release/SKILL.md"
-      ]
-    },
     {
       "source": "~/projects/agentry",
       "extensions": [
@@ -29,7 +18,13 @@
         "-pi-package/extensions/btw/index.ts"
       ],
       "skills": []
-    }
+    },
+    "npm:pi-web-access",
+    "npm:pi-mcp-adapter",
+    "npm:pi-autoresearch",
+    "npm:@eko24ive/pi-ask",
+    "npm:pi-context-usage",
+    "npm:@plannotator/pi-extension"
   ],
   "hideThinkingBlock": false,
   "theme": "dark",

@@ -34,9 +34,9 @@
       "sourceType": "github",
       "sourceUrl": "https://github.com/vercel-labs/agent-browser.git",
       "skillPath": "skills/agent-browser/SKILL.md",
-      "skillFolderHash": "121eecacd86c0aab06aef5cd4663e80c5397cd41",
+      "skillFolderHash": "c1470a475a0472fceda2401ea6763708a91680a8",
       "installedAt": "2026-03-25T17:47:43.301Z",
-      "updatedAt": "2026-04-26T15:34:38.414Z"
+      "updatedAt": "2026-05-17T17:19:55.529Z"
     },
     "find-skills": {
       "source": "vercel-labs/skills",
@@ -52,9 +52,9 @@
       "sourceType": "github",
       "sourceUrl": "https://github.com/anthropics/skills.git",
       "skillPath": "skills/claude-api/SKILL.md",
-      "skillFolderHash": "284049f382b3c2b1989353637e0b3848dad0f09f",
+      "skillFolderHash": "add3040533211c480d0eaae7f39fc6e05e2ea564",
       "installedAt": "2026-03-25T17:51:48.804Z",
-      "updatedAt": "2026-05-05T10:21:36.406Z"
+      "updatedAt": "2026-05-17T17:20:00.618Z"
     },
     "skill-creator": {
       "source": "anthropics/skills",
@@ -106,9 +106,9 @@
       "sourceType": "github",
       "sourceUrl": "https://github.com/microsoft/playwright-cli.git",
       "skillPath": "skills/playwright-cli/SKILL.md",
-      "skillFolderHash": "ff92cdde57ecce01607406a4667dc0f2772dfac1",
+      "skillFolderHash": "7f1be9aef5c4435ed99dc74a383ca814d05c82c5",
       "installedAt": "2026-04-07T12:55:18.151Z",
-      "updatedAt": "2026-05-05T10:21:52.140Z"
+      "updatedAt": "2026-05-17T17:20:03.829Z"
     },
     "feishu-create-doc": {
       "source": "larksuite/openclaw-lark",
