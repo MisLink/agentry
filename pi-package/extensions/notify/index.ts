@@ -6,7 +6,6 @@
  *
  * Terminal support (in priority order):
  *   - Kitty     — OSC 99 via `kitten notify --only-print-escape-code`
- *   - Windows   — PowerShell toast (WT_SESSION)
  *   - Ghostty / iTerm2 / WezTerm — OSC 777
  *   - Others    — terminal bell (BEL)
  *
@@ -18,7 +17,7 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
-import { execFile, execFileSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { detectFocusMode, focusStatusIcon } from "./focus-mode.ts";
 
 // ── Message extraction ─────────────────────────────────────────────────────
@@ -173,34 +172,28 @@ function notifyKitten(title: string, body: string): void {
 }
 
 /**
+ * Strip control characters that could break terminal escape sequences (OSC / BEL).
+ */
+function stripControlChars(text: string): string {
+	return text.replace(/[\x00-\x1f\x7f]/g, "");
+}
+
+/**
  * Raw OSC 99 (kitty desktop notification protocol).
  * Fallback when `kitten` command is unavailable.
  * Uses the simple single-payload form (title only, body appended).
  */
 function notifyOSC99(title: string, body: string): void {
-	const text = body ? `${title}: ${body}` : title;
+	const text = stripControlChars(body ? `${title}: ${body}` : title);
 	// d=0 means complete (non-chunked) notification
 	process.stdout.write(`\x1b]99;d=0;${text}\x1b\\`);
 }
 
-/** Windows Terminal: PowerShell toast notification. */
-function notifyWindows(title: string, body: string): void {
-	const type = "Windows.UI.Notifications";
-	const mgr = `[${type}.ToastNotificationManager, ${type}, ContentType = WindowsRuntime]`;
-	const tmpl = `[${type}.ToastTemplateType]::ToastText01`;
-	const toast = `[${type}.ToastNotification]::new($xml)`;
-	const script = [
-		`${mgr} > $null`,
-		`$xml = [${type}.ToastNotificationManager]::GetTemplateContent(${tmpl})`,
-		`$xml.GetElementsByTagName('text')[0].AppendChild($xml.CreateTextNode('${body}')) > $null`,
-		`[${type}.ToastNotificationManager]::CreateToastNotifier('${title}').Show(${toast})`,
-	].join("; ");
-	execFile("powershell.exe", ["-NoProfile", "-Command", script]);
-}
-
 /** Ghostty / iTerm2 / WezTerm / rxvt-unicode via OSC 777. */
 function notifyOSC777(title: string, body: string): void {
-	process.stdout.write(`\x1b]777;notify;${title};${body}\x07`);
+	const safeTitle = stripControlChars(title);
+	const safeBody = stripControlChars(body);
+	process.stdout.write(`\x1b]777;notify;${safeTitle};${safeBody}\x07`);
 }
 
 /** Universal fallback: audible terminal bell. */
@@ -284,9 +277,7 @@ export function shouldSendNotification(
 function notify(title: string, body: string): void {
 	if (!shouldSendNotification(process.env, process.platform)) return;
 
-	if (process.env.WT_SESSION) {
-		notifyWindows(title, body);
-	} else if (process.env.KITTY_WINDOW_ID) {
+	if (process.env.KITTY_WINDOW_ID) {
 		notifyKitten(title, body);
 	} else if (
 		process.env.TERM_PROGRAM === "iTerm.app" ||

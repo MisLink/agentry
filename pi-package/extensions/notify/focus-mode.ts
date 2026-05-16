@@ -70,13 +70,15 @@ export async function detectFocusMode(read: FocusModeReader = readFocusModeFiles
 		const { assertionsJson, modeConfigurationsJson } = await read();
 		return resolveFocusMode(assertionsJson, modeConfigurationsJson);
 	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code === "EACCES" || code === "EPERM") {
+			return { status: "unavailable", reason: "permission-denied" };
+		}
 		const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
 		if (
 			message.includes("permission") ||
 			message.includes("not permitted") ||
 			message.includes("operation not permitted") ||
-			message.includes("eacces") ||
-			message.includes("eprem") ||
 			message.includes("-54")
 		) {
 			return { status: "unavailable", reason: "permission-denied" };
