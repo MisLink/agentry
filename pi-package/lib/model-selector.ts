@@ -1,5 +1,5 @@
-import { modelsAreEqual, type Api, type Model } from "@mariozechner/pi-ai";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { modelsAreEqual, type Api, type Model } from "@earendil-works/pi-ai";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	Container,
 	fuzzyFilter,
@@ -9,7 +9,7 @@ import {
 	Text,
 	type Component,
 	type TUI,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 
 export const MODEL_SELECTOR_VISIBLE_ITEMS = 10;
 

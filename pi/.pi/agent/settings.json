@@ -4,9 +4,27 @@
   "defaultModel": "claude-sonnet-4.6",
   "defaultThinkingLevel": "high",
   "packages": [
-    "~/projects/agentry",
-    "git:github.com/nicobailon/pi-mcp-adapter@v2.5.3",
-    "git:github.com/davebcn87/pi-autoresearch@v1.3.0"
+    "git:github.com/nicobailon/pi-mcp-adapter",
+    "git:github.com/davebcn87/pi-autoresearch",
+    "git:github.com/eko24ive/pi-ask",
+    "git:github.com/nicobailon/pi-web-access",
+    "git:github.com/championswimmer/pi-context-usage",
+    "git:github.com/backnotprop/plannotator",
+    {
+      "source": "~/projects/agentry",
+      "extensions": [
+        "+pi-package/extensions/notify/index.ts",
+        "+pi-package/extensions/review/index.ts",
+        "+pi-package/extensions/static-check/index.ts",
+        "+pi-package/extensions/rtk.ts",
+        "-pi-package/extensions/web-search/index.ts",
+        "-pi-package/extensions/questionnaire/index.ts",
+        "-pi-package/extensions/plan-tracker/index.ts",
+        "-pi-package/extensions/caveman/index.ts",
+        "-pi-package/extensions/btw/index.ts"
+      ],
+      "skills": []
+    }
   ],
   "hideThinkingBlock": false,
   "theme": "dark",

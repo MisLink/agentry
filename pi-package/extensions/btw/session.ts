@@ -21,9 +21,9 @@ import {
 	type AgentSessionEvent,
 	type ExtensionContext,
 	type ResourceLoader,
-} from "@mariozechner/pi-coding-agent";
-import { complete, type UserMessage, type AssistantMessage, type Message, type Model, type Api } from "@mariozechner/pi-ai";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+} from "@earendil-works/pi-coding-agent";
+import { complete, type UserMessage, type AssistantMessage, type Message, type Model, type Api } from "@earendil-works/pi-ai";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { BtwThread } from "./thread.js";
 
 // ─── System prompts ───────────────────────────────────────────────────────────

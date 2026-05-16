@@ -20,9 +20,9 @@ import {
 	type Focusable,
 	type KeybindingsManager,
 	type TUI,
-} from "@mariozechner/pi-tui";
-import type { Theme } from "@mariozechner/pi-coding-agent";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 
 // ─── Usage formatting ─────────────────────────────────────────────────────────
 

@@ -1,34 +1,32 @@
 /**
  * rtk.ts — RTK token-saving proxy for pi.
  *
- * Delegates all rewrite decisions to `rtk rewrite` (requires rtk ≥ 0.23.0).
- * RTK's Rust binary is the single source of truth for what gets rewritten.
- * Also strips ANSI escape codes from tool results (lossless).
+ * Uses `rtk rewrite` (requires rtk ≥ 0.23.0) to optimize shell commands.
+ * Covers both agent-initiated bash tool calls and user-issued `!<cmd>` commands.
+ * Commands entered with `!!<cmd>` are intentionally not intercepted.
  *
  * Install rtk:
  *   brew install rtk
  *   curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
  *
  * Commands:
- *   /rtk          — toggle on/off
+ *   /rtk          — overlay toggle (enable / disable / status)
  *   /rtk gain     — cumulative token-savings report
  *   /rtk status   — version and session stats
  */
-import { isToolCallEventType, type ExtensionAPI, type ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
+import { spawnSync } from "node:child_process";
+import {
+	createLocalBashOperations,
+	isToolCallEventType,
+	type ExtensionAPI,
+	type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 /** `rtk rewrite` was introduced in 0.23.0. */
 const RTK_MIN_MINOR = 23;
-
-/**
- * Comprehensive ANSI / VT escape sequence regex.
- * Covers CSI sequences (colors, cursor movement), OSC sequences, and Fe escapes.
- * Sourced from the well-tested `strip-ansi` npm package pattern.
- */
-const ANSI_RE =
-	/[\u001B\u009B][[\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\d/#&.:=?%@~_+]*)*|[a-zA-Z\d]+(?:;[-a-zA-Z\d/#&.:=?%@~_+]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
+const REWRITE_TIMEOUT_MS = 5000;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -37,18 +35,16 @@ function parseMinor(versionStr: string): number | null {
 	return m ? Number(m[1]) : null;
 }
 
-function stripAnsi(text: string): string {
-	return text.replace(ANSI_RE, "");
-}
-
 // ─── Extension ────────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
 	let enabled = true;
-	/** rtk is installed AND version ≥ 0.23.0. */
 	let rtkReady = false;
 	let rtkVersion = "";
 	let rewriteCount = 0;
+	let warnedUnavailable = false;
+
+	const localBashOperations = createLocalBashOperations();
 
 	// ── Status bar ───────────────────────────────────────────────────────────
 
@@ -65,143 +61,207 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setStatus("rtk", `🔧 rtk${badge}`);
 	}
 
+	function showStatus(ctx: ExtensionContext): void {
+		ctx.ui.notify(
+			[
+				rtkReady ? `✅ rtk  ${rtkVersion}` : "❌ rtk unavailable",
+				`   enabled  : ${enabled}`,
+				`   rewrites : ${rewriteCount} this session`,
+				"",
+				"Tip: bypass rtk for one command with !RTK_DISABLED=1 <cmd>",
+			].join("\n"),
+			"info",
+		);
+	}
+
+	function showGain(ctx: ExtensionContext): void {
+		if (!rtkReady) {
+			ctx.ui.notify("rtk not available", "warning");
+			return;
+		}
+		const res = spawnSync("rtk", ["gain"], {
+			encoding: "utf-8",
+			timeout: REWRITE_TIMEOUT_MS,
+		});
+		ctx.ui.notify(res.stdout?.trim() || res.stderr?.trim() || "No stats yet.", "info");
+	}
+
 	// ── RTK availability check ───────────────────────────────────────────────
 
-	async function checkRtk(ctx: ExtensionContext): Promise<void> {
+	function checkRtk(ctx: ExtensionContext): void {
 		try {
-			const res = await pi.exec("rtk", ["--version"], { timeout: 5000 });
-			if (res.code !== 0) throw new Error("rtk exited non-zero");
+			const res = spawnSync("rtk", ["--version"], {
+				encoding: "utf-8",
+				timeout: REWRITE_TIMEOUT_MS,
+			});
 
-			rtkVersion = res.stdout.trim();
+			if (res.error) {
+				throw res.error;
+			}
+			if (res.status !== 0) {
+				throw new Error("rtk exited non-zero");
+			}
+
+			rtkVersion = (res.stdout ?? "").trim();
 			const minor = parseMinor(rtkVersion);
 			if (minor === null) throw new Error(`unparseable version: ${rtkVersion}`);
 
 			if (minor < RTK_MIN_MINOR) {
 				rtkReady = false;
-				ctx.ui.notify(
-					`⚠️  rtk ${rtkVersion} is too old (need ≥ 0.${RTK_MIN_MINOR}.0).\n` +
-						"Upgrade:  brew upgrade rtk",
-					"warning",
-				);
+				if (!warnedUnavailable) {
+					warnedUnavailable = true;
+					ctx.ui.notify(
+						`⚠️  rtk ${rtkVersion} is too old (need ≥ 0.${RTK_MIN_MINOR}.0).\n` +
+							"Upgrade:  brew upgrade rtk",
+						"warning",
+					);
+				}
 			} else {
 				rtkReady = true;
+				warnedUnavailable = false;
 			}
-		} catch {
+		} catch (err: unknown) {
 			rtkReady = false;
-			ctx.ui.notify(
-				[
-					"⚠️  rtk not found — extension inactive.",
-					"",
-					"Install:  brew install rtk",
-					"or:       curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh",
-					"",
-					"Restart pi after installing.",
-				].join("\n"),
-				"warning",
-			);
+			if (!warnedUnavailable) {
+				warnedUnavailable = true;
+				const errno = (err as NodeJS.ErrnoException).code;
+				const hint =
+					errno === "EACCES"
+						? "rtk binary found but not executable. Run: chmod +x $(command -v rtk)"
+						: [
+								"⚠️  rtk not found — extension inactive.",
+								"",
+								"Install:  brew install rtk",
+								"or:       curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh",
+								"",
+								"Restart pi after installing.",
+							].join("\n");
+				ctx.ui.notify(`⚠️  ${hint}`, "warning");
+			}
+		}
+	}
+
+	// ── Core rewrite (shared by tool_call and user_bash) ─────────────────────
+
+	function rtkRewrite(command: string): string | undefined {
+		if (!enabled || !rtkReady) return undefined;
+
+		try {
+			const res = spawnSync("rtk", ["rewrite", command], {
+				encoding: "utf-8",
+				timeout: REWRITE_TIMEOUT_MS,
+			});
+
+			if (res.error) return undefined;
+
+			// Exit codes: 0=rewritten, 1=no equivalent, 2=deny, 3=ask
+			// For 1/2/3 stdout is empty or same → no rewrite
+			const out = (res.stdout ?? "").trim();
+			return out.length > 0 && out !== command ? out : undefined;
+		} catch {
+			return undefined;
 		}
 	}
 
 	// ── Session lifecycle ────────────────────────────────────────────────────
 
-	pi.on("session_start", async (_event, ctx) => {
+	function handleRewrite(original: string, rewritten: string): void {
+		rewriteCount++;
+	}
+
+	pi.on("session_start", (_event, ctx) => {
 		rewriteCount = 0;
-		await checkRtk(ctx);
+		checkRtk(ctx);
 		refreshStatus(ctx);
 	});
 
-	// ── Command rewriting ────────────────────────────────────────────────────
+	// ── Agent bash tool calls ────────────────────────────────────────────────
 
 	pi.on("tool_call", async (event, ctx) => {
 		if (!enabled || !rtkReady) return;
 		if (!isToolCallEventType("bash", event)) return;
 
-		const original = event.input.command;
-
-		let result: { code: number; stdout: string };
-		try {
-			// `rtk rewrite` exit codes:
-			//   0  rewrite found, auto-allow
-			//   1  no RTK equivalent, pass through unchanged
-			//   2  deny rule matched, pass through unchanged
-			//   3  ask rule matched: rewrite but surface to user
-			result = await pi.exec("rtk", ["rewrite", original], { timeout: 2000 });
-		} catch {
-			return; // rtk unreachable, pass through unchanged
-		}
-
-		if (result.code === 1 || result.code === 2) return;
-
-		const rewritten = result.stdout.trim();
-		if (!rewritten || rewritten === original) return;
-
-		event.input.command = rewritten;
-		rewriteCount++;
-		refreshStatus(ctx);
-
-		if (result.code === 3) {
-			// Ask rule: rewrite happened but let the user know.
-			ctx.ui.notify(`rtk rewrote (ask rule): ${rewritten}`, "info");
+		const rewritten = rtkRewrite(event.input.command);
+		if (rewritten) {
+			const original = event.input.command;
+			event.input.command = rewritten;
+			handleRewrite(original, rewritten);
+			refreshStatus(ctx);
 		}
 	});
 
-	// ── ANSI stripping (lossless output cleanup) ─────────────────────────────
+	// ── User !<cmd> shell commands ───────────────────────────────────────────
 
-	pi.on("tool_result", async (event, _ctx) => {
-		if (!enabled) return;
+	pi.on("user_bash", (event, _ctx) => {
+		// !!<cmd> → context-excluded, don't intercept
+		if (event.excludeFromContext) return;
+		if (!enabled || !rtkReady) return;
 
-		const blocks = event.content;
-		let changed = false;
+		const rewritten = rtkRewrite(event.command);
+		if (!rewritten) return;
 
-		const cleaned = blocks.map((block) => {
-			if (block.type !== "text") return block;
-			const stripped = stripAnsi(block.text);
-			if (stripped === block.text) return block;
-			changed = true;
-			return { ...block, text: stripped } satisfies TextContent;
-		}) satisfies (TextContent | ImageContent)[];
-
-		if (!changed) return;
-		return { content: cleaned };
+		handleRewrite(event.command, rewritten);
+		return {
+			operations: {
+				exec: (_command, cwd, options) =>
+					localBashOperations.exec(rewritten, cwd, options),
+			},
+		};
 	});
 
 	// ── /rtk command ─────────────────────────────────────────────────────────
 
 	pi.registerCommand("rtk", {
-		description: "Toggle rtk on/off · subcommands: gain, status",
+		description: "Toggle rtk on/off · subcommands: enable, disable, status, gain",
 		getArgumentCompletions: (prefix) =>
 			[
+				{ value: "enable", label: "enable — turn on rewriting" },
+				{ value: "disable", label: "disable — turn off rewriting" },
 				{ value: "gain", label: "gain — cumulative token-savings report" },
 				{ value: "status", label: "status — version and session stats" },
 			].filter((s) => s.value.startsWith(prefix)),
 		handler: async (args, ctx) => {
 			const sub = args?.trim().toLowerCase() ?? "";
 
+			if (sub === "enable") {
+				enabled = true;
+				ctx.ui.notify("rtk enabled ✓", "info");
+				refreshStatus(ctx);
+				return;
+			}
+
+			if (sub === "disable") {
+				enabled = false;
+				ctx.ui.notify("rtk disabled", "warning");
+				refreshStatus(ctx);
+				return;
+			}
+
 			if (sub === "gain") {
-				if (!rtkReady) {
-					ctx.ui.notify("rtk not available", "warning");
-					return;
-				}
-				const res = await pi.exec("rtk", ["gain"], {});
-				ctx.ui.notify(res.stdout || res.stderr || "No stats yet.", "info");
+				showGain(ctx);
 				return;
 			}
 
 			if (sub === "status") {
-				ctx.ui.notify(
-					[
-						rtkReady ? `✅ rtk  ${rtkVersion}` : "❌ rtk unavailable",
-						`   enabled  : ${enabled}`,
-						`   rewrites : ${rewriteCount} this session`,
-					].join("\n"),
-					"info",
-				);
+				showStatus(ctx);
 				return;
 			}
 
-			// Default (no args): toggle on/off
-			enabled = !enabled;
-			ctx.ui.notify(`rtk ${enabled ? "enabled ✓" : "disabled"}`, enabled ? "info" : "warning");
+			// No args → overlay
+			const selected = await ctx.ui.select("rtk", ["enable", "disable", "status", "gain"]);
+			if (!selected) return;
+
+			if (selected === "enable") {
+				enabled = true;
+				ctx.ui.notify("rtk enabled ✓", "info");
+			} else if (selected === "disable") {
+				enabled = false;
+				ctx.ui.notify("rtk disabled", "warning");
+			} else if (selected === "status") {
+				showStatus(ctx);
+			} else if (selected === "gain") {
+				showGain(ctx);
+			}
 			refreshStatus(ctx);
 		},
 	});

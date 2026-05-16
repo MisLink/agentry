@@ -17,8 +17,8 @@
  * - Work log on plan completion
  */
 
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { filterPlanTrackerContextMessages, parsePlanCommand, shouldQueueNextStepAfterCompletion, type PlanExecutionMode, type PlanStepDraft } from "./logic.js";
 import { formatElapsed, type PlanStep } from "./utils.js";

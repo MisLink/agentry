@@ -6,8 +6,8 @@
  * Multiple questions: tab-based wizard, review + confirm at end.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Text, truncateToWidth } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { notifyBeforePrompt } from "../notify/index.js";
 import { QuestionnaireComponent } from "./component.js";

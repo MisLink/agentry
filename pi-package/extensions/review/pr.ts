@@ -6,7 +6,7 @@
  * 2. 远端 host 推断（`github.com` → gh；host 含 gitlab → glab）
  * 3. CLI 兜底（PATH 上有 glab 用 glab，否则 gh）
  */
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";

@@ -5,7 +5,7 @@
  * committed Q&A items, in-flight (pending) state, and session
  * persistence/restore. No pi-coding-agent or TUI imports here — pure logic.
  */
-import type { AssistantMessage, Message } from "@mariozechner/pi-ai";
+import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 

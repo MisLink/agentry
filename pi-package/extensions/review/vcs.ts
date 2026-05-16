@@ -2,7 +2,7 @@
  * 审查扩展用的 VCS 适配层：把 git / jj 操作统一在一组函数下，避免命令拼装
  * 处到处都是 vcs × target 的 switch。
  */
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { sanitizeRefName } from "./sanitize.ts";
 
 function quoteShellArg(value: string): string {

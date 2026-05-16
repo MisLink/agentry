@@ -33,8 +33,8 @@ import {
 	type ExtensionAPI,
 	type ExtensionCommandContext,
 	type ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
-import type { Api, Model } from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { notifyBeforePrompt } from "../notify/index.js";

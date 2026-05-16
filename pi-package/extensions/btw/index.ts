@@ -32,8 +32,8 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 	type Theme,
-} from "@mariozechner/pi-coding-agent";
-import { Key, Markdown, truncateToWidth, type OverlayHandle } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { Key, Markdown, truncateToWidth, type OverlayHandle } from "@earendil-works/pi-tui";
 import { notifyBeforePrompt } from "../notify/index.js";
 import {
 	BtwThread,

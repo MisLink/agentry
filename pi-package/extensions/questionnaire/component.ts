@@ -20,8 +20,8 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 	type TUI,
-} from "@mariozechner/pi-tui";
-import { type Theme } from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-tui";
+import { type Theme } from "@earendil-works/pi-coding-agent";
 import type { Answer, Question, QuestionnaireResult } from "./types.js";
 
 export class QuestionnaireComponent implements Component {
