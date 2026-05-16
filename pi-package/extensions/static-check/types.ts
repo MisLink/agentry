@@ -58,6 +58,8 @@ export interface ToolSpec {
   tier: "local" | "system" | "runner";
   /** Human-readable label, e.g. "tsc (local)", "mypy (venv)", "mypy (uvx)". */
   displayName: string;
+  /** Optional checker-specific metadata needed to build argv safely. */
+  metadata?: Record<string, string>;
 }
 
 // ── Language checker plugin ────────────────────────────────────────────────
@@ -116,6 +118,7 @@ export interface LanguageChecker {
     stderr: string,
     exitCode: number,
     projectRoot: string,
+    tool?: ToolSpec,
   ): Diagnostic[];
 }
 

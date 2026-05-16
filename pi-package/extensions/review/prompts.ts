@@ -41,6 +41,7 @@ function buildPerTargetInstruction(target: ReviewTarget, vcs: ReviewVcs, mergeBa
 		case "uncommitted":
 		case "baseBranch":
 		case "commit":
+		case "files":
 			return `审查目标：${label}。${hint} 请按优先级列出具体、可执行的评审项。`;
 		case "mergeRequest": {
 			const kind = target.provider === "glab" ? "Merge Request" : "Pull Request";

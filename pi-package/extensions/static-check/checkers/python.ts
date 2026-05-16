@@ -12,7 +12,7 @@
 
 import { findSystemBin, findUvxRunner, findVenvBin } from "../tool-finder.js";
 import { makeDiagnostic, type Diagnostic, type LanguageChecker, type ToolSpec } from "../types.js";
-import { relative } from "node:path";
+import { isAbsolute, relative } from "node:path";
 
 /**
  * Detect a file finder (fd or find) + python3 for the ast.parse fallback.
@@ -33,9 +33,8 @@ async function detectAstFallback(projectRoot: string): Promise<ToolSpec | null> 
       toolId: "python-ast-fd",
       tier: "system",
       displayName: `ast.parse via fd + ${python.displayName}`,
-      // stash python cmd for buildArgs
-      _pythonCmd: python.cmd,
-    } as ToolSpec;
+      metadata: { pythonCmd: python.cmd },
+    };
   }
 
   const find = await findSystemBin("find");
@@ -45,8 +44,8 @@ async function detectAstFallback(projectRoot: string): Promise<ToolSpec | null> 
     toolId: "python-ast-find",
     tier: "system",
     displayName: `ast.parse via find + ${python.displayName}`,
-    _pythonCmd: python.cmd,
-  } as ToolSpec;
+    metadata: { pythonCmd: python.cmd },
+  };
 }
 
 /**
@@ -95,7 +94,7 @@ export const pythonChecker: LanguageChecker = {
   },
 
   buildArgs(projectRoot, tool) {
-    const pythonCmd = (tool as ToolSpec & { _pythonCmd?: string })._pythonCmd ?? "python3";
+    const pythonCmd = tool.metadata?.pythonCmd ?? "python3";
 
     // fd: respects .gitignore automatically, -X batches all files into one call
     if (tool.toolId === "python-ast-fd") {
@@ -160,26 +159,33 @@ function tryParsePyrightJson(
   stdout: string,
   projectRoot: string,
 ): Diagnostic[] | null {
+  const trimmed = stdout.trimStart();
+  if (!trimmed.startsWith("{")) return null;
   const jsonStart = stdout.indexOf("{");
-  if (jsonStart === -1) return null;
-  try {
-    const parsed = JSON.parse(stdout.slice(jsonStart)) as PyrightOutput;
-    if (!Array.isArray(parsed.generalDiagnostics)) return null;
 
-    return parsed.generalDiagnostics
-      .filter((d) => d.severity === "error" || d.severity === "warning")
-      .map((d) =>
-        makeDiagnostic(
-          toRelative(d.file, projectRoot),
-          d.range.start.line + 1, // pyright uses 0-based lines
-          d.range.start.character + 1,
-          d.message,
-          d.severity as "error" | "warning",
-        ),
-      );
+  let parsed: PyrightOutput;
+  try {
+    parsed = JSON.parse(stdout.slice(jsonStart)) as PyrightOutput;
   } catch {
-    return null;
+    // stdout starts with '{' — this is JSON output mode. If JSON.parse fails,
+    // the output is corrupted or truncated. Surface the error explicitly
+    // instead of falling through to a line-based parser that will find nothing.
+    throw new Error(`pyright JSON output is malformed — possible truncation or encoding issue`);
   }
+
+  if (!Array.isArray(parsed.generalDiagnostics)) return null;
+
+  return parsed.generalDiagnostics
+    .filter((d) => d.severity === "error" || d.severity === "warning")
+    .map((d) =>
+      makeDiagnostic(
+        toRelative(d.file, projectRoot),
+        d.range.start.line + 1, // pyright uses 0-based lines
+        d.range.start.character + 1,
+        d.message,
+        d.severity as "error" | "warning",
+      ),
+    );
 }
 
 // ── Line-based parser (mypy, ast.parse output) ─────────────────────────────
@@ -208,9 +214,6 @@ function parseLineBasedOutput(output: string, projectRoot: string): Diagnostic[]
 }
 
 function toRelative(absOrRel: string, root: string): string {
-  try {
-    return relative(root, absOrRel).replace(/\\/g, "/");
-  } catch {
-    return absOrRel;
-  }
+  if (isAbsolute(absOrRel)) return relative(root, absOrRel).replace(/\\/g, "/");
+  return absOrRel.replace(/\\/g, "/");
 }

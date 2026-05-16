@@ -146,7 +146,11 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
       signal,
     );
 
-    return checker.parseOutput(stdout, stderr, code, projectRoot);
+    return checker.parseOutput(stdout, stderr, code, projectRoot, tool);
+  }
+
+  function errorMessage(err: unknown): string {
+    return err instanceof Error ? err.message : String(err);
   }
 
   // ── Widget / status management ────────────────────────────────────────────
@@ -189,35 +193,51 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
     const effectiveSignal = signal ?? timeoutController.signal;
 
     try {
-      // Run all checks in parallel.
+      // Run all checks in parallel. Parser failures are converted to explicit
+      // per-checker failures here so one broken checker doesn't discard other
+      // results, but failed checkers never advance baseline or appear clean.
       const checkResults = await Promise.all(
         affected.map(async ({ checker, projectRoot }) => {
-          const all = await runCheck(checker, projectRoot, ctx, effectiveSignal);
-          if (all === null) return null; // tool missing
+          try {
+            const all = await runCheck(checker, projectRoot, ctx, effectiveSignal);
+            if (all === null) return { kind: "missing" as const }; // tool missing
 
-          // Step 5: delta vs. last check.
-          const newErrors = state.getDelta(checker.id, projectRoot, all);
+            // Step 5: delta vs. last check.
+            const newErrors = state.getDelta(checker.id, projectRoot, all);
 
-          // Step 6: loop detection.
-          const isLooping = state.recordAndCheckLoop(
-            checker.id,
-            projectRoot,
-            newErrors,
-          );
+            // Step 6: loop detection.
+            const isLooping = state.recordAndCheckLoop(
+              checker.id,
+              projectRoot,
+              newErrors,
+            );
 
-          // Advance baseline for next turn.
-          state.updateBaseline(checker.id, projectRoot, all);
+            // Advance baseline for next turn only after a successful parse.
+            state.updateBaseline(checker.id, projectRoot, all);
 
-          return { checker, projectRoot, newErrors, isLooping };
+            return { kind: "success" as const, checker, projectRoot, newErrors, isLooping };
+          } catch (err) {
+            return { kind: "failure" as const, checker, projectRoot, message: errorMessage(err) };
+          }
         }),
       );
 
-      // Discard null results (missing tools).
-      const valid = checkResults.filter(
-        (r): r is NonNullable<typeof r> => r !== null,
-      );
+      const failures = checkResults.filter((r): r is Extract<typeof r, { kind: "failure" }> => r.kind === "failure");
+      for (const failure of failures) {
+        ctx.ui.notify(
+          `Static check: ${failure.checker.name} failed — ${failure.message}`,
+          "error",
+        );
+      }
+
+      const valid = checkResults.filter((r): r is Extract<typeof r, { kind: "success" }> => r.kind === "success");
 
       if (valid.length === 0) {
+        if (failures.length > 0) {
+          ctx.ui.setWidget("static-check", undefined);
+          ctx.ui.setStatus("static-check", ctx.ui.theme.fg("error", `✗ ${failures.length} check failed`));
+          return;
+        }
         clearStatusAndWidget(ctx);
         return;
       }
@@ -242,8 +262,16 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
       const totalNew = valid.reduce((s, r) => s + r.newErrors.length, 0);
 
       if (totalNew === 0) {
-        // All clean this turn.
         ctx.ui.setWidget("static-check", undefined);
+        if (failures.length > 0) {
+          ctx.ui.setStatus(
+            "static-check",
+            theme.fg("error", `✗ ${failures.length} check failed`),
+          );
+          return;
+        }
+
+        // All successful checks are clean this turn.
         ctx.ui.setStatus(
           "static-check",
           theme.fg("success", "✓ clean"),
@@ -260,7 +288,7 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
       }
       ctx.ui.setStatus(
         "static-check",
-        theme.fg("error", `✗ ${totalNew} err`),
+        theme.fg("error", failures.length > 0 ? `✗ ${totalNew} err, ${failures.length} failed` : `✗ ${totalNew} err`),
       );
 
       // ── Inject into LLM (auto-fix) or just notify (notify-only) ─────────
@@ -297,6 +325,11 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
         },
         { triggerTurn: true },
       );
+    } catch (err) {
+      // Safety net: if something still throws (e.g. state mutation error),
+      // clear the "checking…" status so it doesn't hang.
+      clearStatusAndWidget(ctx);
+      throw err;
     } finally {
       clearTimeout(timeoutId);
     }
@@ -412,7 +445,8 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
       // We cannot rely on state.modifiedFiles here: by the time the user types
       // /staticcheck, agent_end has already called resetTurn() which empties it.
       // Instead we walk up from the current directory to find real project roots.
-      state.resetSession();
+      // Preserve existing baselines/loop state: manual runs should not make the
+      // next automatic check treat all pre-existing errors as new.
 
       const found: Array<{ checker: LanguageChecker; projectRoot: string }> = [];
       const seen = new Set<string>();
@@ -439,59 +473,87 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
       const checkerNames = [...new Set(found.map((f) => f.checker.name))];
       showCheckingStatus(ctx, checkerNames);
 
-      // Run checks directly on the discovered roots and report.
-      const results = await Promise.all(
-        found.map(async ({ checker, projectRoot }) => {
-          const all = await runCheck(checker, projectRoot, ctx);
-          return { checker, projectRoot, all };
-        }),
-      );
+      try {
+        // Run checks directly on the discovered roots and report. Parser
+        // failures are explicit results: they don't update baseline and never
+        // count as a clean check.
+        const results = await Promise.all(
+          found.map(async ({ checker, projectRoot }) => {
+            try {
+              const all = await runCheck(checker, projectRoot, ctx);
+              if (all === null) return { kind: "missing" as const, checker, projectRoot };
+              return { kind: "success" as const, checker, projectRoot, all };
+            } catch (err) {
+              return { kind: "failure" as const, checker, projectRoot, message: errorMessage(err) };
+            }
+          }),
+        );
 
-      let totalErrors = 0;
-      const theme = ctx.ui.theme;
-      const formatBlocks: Array<{ widgetLines: string[]; hasErrors: boolean }> = [];
-
-      for (const { checker, projectRoot, all } of results) {
-        if (all === null) continue;
-        state.updateBaseline(checker.id, projectRoot, all);
-        const hasErrors = all.length > 0;
-        if (!hasErrors) {
-          formatBlocks.push({ widgetLines: [], hasErrors: false });
-          continue;
+        const failures = results.filter((r): r is Extract<typeof r, { kind: "failure" }> => r.kind === "failure");
+        for (const failure of failures) {
+          ctx.ui.notify(
+            `Static check: ${failure.checker.name} failed — ${failure.message}`,
+            "error",
+          );
         }
-        totalErrors += all.length;
-        const fmt = formatCheckResult(checker.name, all, state.config, false, theme);
-        formatBlocks.push({ widgetLines: fmt.widgetLines, hasErrors: true });
-      }
 
-      if (totalErrors === 0) {
+        let totalErrors = 0;
+        const theme = ctx.ui.theme;
+        const formatBlocks: Array<{ widgetLines: string[]; hasErrors: boolean }> = [];
+        const successes = results.filter((r): r is Extract<typeof r, { kind: "success" }> => r.kind === "success");
+
+        for (const { checker, projectRoot, all } of successes) {
+          state.updateBaseline(checker.id, projectRoot, all);
+          const hasErrors = all.length > 0;
+          if (!hasErrors) {
+            formatBlocks.push({ widgetLines: [], hasErrors: false });
+            continue;
+          }
+          totalErrors += all.length;
+          const fmt = formatCheckResult(checker.name, all, state.config, false, theme);
+          formatBlocks.push({ widgetLines: fmt.widgetLines, hasErrors: true });
+        }
+
+        if (totalErrors === 0) {
+          clearStatusAndWidget(ctx);
+          if (failures.length > 0) {
+            ctx.ui.setStatus("static-check", theme.fg("error", `✗ ${failures.length} check failed`));
+            return;
+          }
+          ctx.ui.setStatus("static-check", theme.fg("success", "✓ clean"));
+          setTimeout(() => ctx.ui.setStatus("static-check", undefined), 3_000);
+          ctx.ui.notify("Static check: no errors found.", "info");
+          return;
+        }
+
+        const widgetLines = buildCombinedWidget(formatBlocks, theme);
+        if (widgetLines) {
+          ctx.ui.setWidget("static-check", widgetLines, { placement: "aboveEditor" });
+        }
+        ctx.ui.setStatus("static-check", theme.fg("error", failures.length > 0 ? `✗ ${totalErrors} err, ${failures.length} failed` : `✗ ${totalErrors} err`));
+
+        if (state.config.mode === "auto-fix") {
+          const llmParts = successes
+            .filter((r) => r.all.length > 0)
+            .map(({ checker, all }) =>
+              formatCheckResult(checker.name, all, state.config, false, theme).llmMessage,
+            );
+          if (llmParts.length > 0) {
+            pi.sendMessage(
+              { customType: "static-check-errors", content: llmParts.join("\n\n---\n\n"), display: true },
+              { triggerTurn: true },
+            );
+          }
+        } else {
+          ctx.ui.notify(`Static check: ${totalErrors} error(s) found (see widget).`, "warning");
+        }
+      } catch (err) {
+        // Safety net: clear the "checking…" status on unexpected failure.
         clearStatusAndWidget(ctx);
-        ctx.ui.setStatus("static-check", theme.fg("success", "✓ clean"));
-        setTimeout(() => ctx.ui.setStatus("static-check", undefined), 3_000);
-        ctx.ui.notify("Static check: no errors found.", "info");
-        return;
-      }
-
-      const widgetLines = buildCombinedWidget(formatBlocks, theme);
-      if (widgetLines) {
-        ctx.ui.setWidget("static-check", widgetLines, { placement: "aboveEditor" });
-      }
-      ctx.ui.setStatus("static-check", theme.fg("error", `✗ ${totalErrors} err`));
-
-      if (state.config.mode === "auto-fix") {
-        const llmParts = results
-          .filter((r) => r.all !== null && r.all.length > 0)
-          .map(({ checker, all }) =>
-            formatCheckResult(checker.name, all!, state.config, false, theme).llmMessage,
-          );
-        if (llmParts.length > 0) {
-          pi.sendMessage(
-            { customType: "static-check-errors", content: llmParts.join("\n\n---\n\n"), display: true },
-            { triggerTurn: true },
-          );
-        }
-      } else {
-        ctx.ui.notify(`Static check: ${totalErrors} error(s) found (see widget).`, "warning");
+        ctx.ui.notify(
+          `Static check failed — ${err instanceof Error ? err.message : String(err)}`,
+          "error",
+        );
       }
     },
   });

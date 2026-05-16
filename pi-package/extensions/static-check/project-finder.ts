@@ -12,8 +12,8 @@
 import { access } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-/** Cache key → resolved project root (or null if not found). */
-const cache = new Map<string, string | null>();
+/** Cache key → resolved project root (only positive results are cached). */
+const cache = new Map<string, string>();
 
 /**
  * Walk up from startDir, returning the first ancestor directory that
@@ -46,7 +46,8 @@ export async function findProjectRoot(
     dir = parent;
   }
 
-  cache.set(cacheKey, null);
+  // Don't cache negative lookups — a config marker may be created later
+  // in the same session (e.g. user adds tsconfig.json after initial scan).
   return null;
 }
 

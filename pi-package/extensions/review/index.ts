@@ -20,6 +20,7 @@
  *   /review uncommitted      未提交改动
  *   /review branch <名称>     相对某分支 / bookmark
  *   /review commit <提交ID>   某个提交 / jj change
+ *   /review <路径 ...>        审查指定文件 / 目录（可用 @ 选择文件）
  *   /review mr <编号>         当前仓库的 GitLab MR（glab 取信息 + 临时 worktree）
  *   /review pr <编号>         当前仓库的 GitHub PR（gh 取信息 + 临时 worktree）
  *   /review status           查看当前审查状态
@@ -81,7 +82,7 @@ let currentSession: ReviewSession | undefined;
 
 const REVIEW_STATE_TYPE = "review-session";
 const REVIEW_COMMAND_DESCRIPTION =
-	"审查代码改动。用法：/review [uncommitted | branch <名称> | commit <提交 ID> | mr <编号> | pr <编号> | status] [--extra \"...\"]";
+	"审查代码改动。用法：/review [uncommitted | branch <名称> | commit <提交 ID> | mr <编号> | pr <编号> | status | <路径 ...>] [--extra \"...\"]";
 
 type ReviewSessionState = {
 	active: boolean;
@@ -162,6 +163,9 @@ function tokenizeArgs(value: string): TokenizeResult {
 }
 
 type ParsedArgs = {
+	/** 原始位置参数；文件 / 目录模式需要保留路径大小写。 */
+	positional: string[];
+	/** 小写后的首个位置参数；仅用于识别保留子命令。 */
 	subcommand: string | null;
 	rest: string[];
 	extra: string | null;
@@ -170,10 +174,10 @@ type ParsedArgs = {
 
 function parseArgs(args: string | undefined): ParsedArgs {
 	const trimmed = args?.trim() ?? "";
-	if (!trimmed) return { subcommand: null, rest: [], extra: null, error: null };
+	if (!trimmed) return { positional: [], subcommand: null, rest: [], extra: null, error: null };
 	const tokenizeResult = tokenizeArgs(trimmed);
 	if (!tokenizeResult.ok) {
-		return { subcommand: null, rest: [], extra: null, error: tokenizeResult.error };
+		return { positional: [], subcommand: null, rest: [], extra: null, error: tokenizeResult.error };
 	}
 	const tokens = tokenizeResult.tokens;
 	const positional: string[] = [];
@@ -182,7 +186,7 @@ function parseArgs(args: string | undefined): ParsedArgs {
 		const token = tokens[i] ?? "";
 		if (token === "--extra") {
 			const next = tokens[i + 1];
-			if (!next) return { subcommand: null, rest: [], extra: null, error: "--extra 缺少参数" };
+			if (!next) return { positional: [], subcommand: null, rest: [], extra: null, error: "--extra 缺少参数" };
 			extra = next;
 			i += 1;
 			continue;
@@ -194,7 +198,13 @@ function parseArgs(args: string | undefined): ParsedArgs {
 		positional.push(token);
 	}
 	const [subcommand, ...rest] = positional;
-	return { subcommand: subcommand?.toLowerCase() ?? null, rest, extra, error: null };
+	return { positional, subcommand: subcommand?.toLowerCase() ?? null, rest, extra, error: null };
+}
+
+const REVIEW_SUBCOMMANDS = new Set(["uncommitted", "branch", "commit", "mr", "pr", "status"]);
+
+function isDirectFileTarget(parsed: ParsedArgs): boolean {
+	return parsed.subcommand !== null && !REVIEW_SUBCOMMANDS.has(parsed.subcommand);
 }
 
 // ─── 审查目标解析 ────────────────────────────────────────────────────────────
@@ -247,12 +257,11 @@ async function resolveTargetFromArgs(
 			});
 		}
 
-		default:
-			ctx.ui.notify(
-				"用法：/review [uncommitted | branch <name> | commit <rev> | mr <id> | pr <id> | status]",
-				"error",
-			);
-			return null;
+		default: {
+			const paths = parsed.positional.map((p) => p.trim()).filter(Boolean);
+			if (paths.length === 0) return null;
+			return { type: "files", paths };
+		}
 	}
 }
 
@@ -506,7 +515,7 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 		const selectedModel = await selectReviewModel(ctx);
 		if (!selectedModel) return;
 
-		const vcs = await detectVCS(pi);
+		const vcs = target.type === "files" ? "git" : await detectVCS(pi);
 		// gh/glab 信息获取配合 git worktree；MR/PR 的 diff 提示强制走 git，
 		// 避免 jj 仓库里生成错误的 `jj diff` 命令。
 		const promptVcs: ReviewVcs = target.type === "mergeRequest" ? "git" : vcs;
@@ -669,8 +678,7 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 		}
 
 		const session = currentSession;
-		const originId = session.originId;
-		if (!originId) return;
+		const originId = session.originId!;
 		const summarize = action !== "returnOnly";
 		const progressMessage = action === "returnOnly"
 			? "正在返回主会话"
@@ -683,11 +691,13 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 		const result = await navigateBack(ctx, originId, summarize);
 		if (!result.ok) {
 			clearReviewProgress(ctx);
-			if (currentSession) {
-				setReviewWidget(ctx, currentSession.targetLabel, currentSession.completedTotalMs !== undefined);
+			if (session) {
+				setReviewWidget(ctx, session.targetLabel, session.completedTotalMs !== undefined);
 			}
 			if (result.cancelled) {
 				ctx.ui.notify("已取消。再次运行 /end-review 可重试。", "info");
+			} else {
+				ctx.ui.notify("返回失败，可再次运行 /end-review 重试。", "warning");
 			}
 			return;
 		}
@@ -715,7 +725,10 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 		persistState({ active: false });
 		await cleanupReviewWorktree(ctx, session?.worktree);
 		if (session?.preReviewModel) {
-			await pi.setModel(session.preReviewModel);
+			const restored = await pi.setModel(session.preReviewModel);
+			if (!restored && ctx.hasUI) {
+				ctx.ui.notify("审查模型还原失败，请手动切换回之前的模型。", "warning");
+			}
 		}
 	}
 
@@ -764,14 +777,17 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 				return;
 			}
 
-			// 仓库前置检查：git 与 jj 都不在就不要启动昂贵的审查模型
-			const [gitCheck, jjCheck] = await Promise.all([
-				pi.exec("git", ["rev-parse", "--git-dir"]),
-				pi.exec("jj", ["--ignore-working-copy", "root"]),
-			]);
-			if (gitCheck.code !== 0 && jjCheck.code !== 0) {
-				ctx.ui.notify("当前目录不是 git / jj 仓库，无法运行审查。", "error");
-				return;
+			// 直接传路径时不依赖 VCS，跳过仓库检查；交互式 / VCS 目标仍需在仓库中运行。
+			if (!isDirectFileTarget(parsed)) {
+				// 仓库前置检查：git 与 jj 都不在就不要启动昂贵的审查模型
+				const [gitCheck, jjCheck] = await Promise.all([
+					pi.exec("git", ["rev-parse", "--git-dir"]),
+					pi.exec("jj", ["--ignore-working-copy", "root"]),
+				]);
+				if (gitCheck.code !== 0 && jjCheck.code !== 0) {
+					ctx.ui.notify("当前目录不是 git / jj 仓库，无法运行审查。", "error");
+					return;
+				}
 			}
 
 			const target = await resolveTargetFromArgs(pi, parsed, ctx);
@@ -792,14 +808,7 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 	// ─── 生命周期钩子 ────────────────────────────────────────────────────
 
 	pi.on("session_shutdown", async (_event, ctx) => {
-		clearReviewWidget(ctx);
-		const session = currentSession;
-		currentSession = undefined;
-		await cleanupReviewWorktree(ctx, session?.worktree);
-		persistState({ active: false });
-		if (session?.preReviewModel) {
-			await pi.setModel(session.preReviewModel);
-		}
+		await finalizeReviewState(ctx);
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {

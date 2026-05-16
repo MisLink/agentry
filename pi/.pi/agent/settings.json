@@ -8,8 +8,13 @@
     "git:github.com/davebcn87/pi-autoresearch",
     "git:github.com/eko24ive/pi-ask",
     "git:github.com/nicobailon/pi-web-access",
-    "git:github.com/championswimmer/pi-context-usage",
-    "git:github.com/backnotprop/plannotator",
+    {
+      "source": "git:github.com/championswimmer/pi-context-usage",
+      "skills": [
+        "-.agents/skills/planning/SKILL.md",
+        "-.agents/skills/release/SKILL.md"
+      ]
+    },
     {
       "source": "~/projects/agentry",
       "extensions": [
@@ -32,5 +37,6 @@
   "showHardwareCursor": true,
   "treeFilterMode": "default",
   "doubleEscapeAction": "tree",
-  "steeringMode": "all"
+  "steeringMode": "all",
+  "skills": []
 }

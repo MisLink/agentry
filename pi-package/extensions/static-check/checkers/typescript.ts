@@ -9,7 +9,7 @@
 
 import { findLocalNodeBin, findNpxRunner, findSystemBin } from "../tool-finder.js";
 import { makeDiagnostic, type Diagnostic, type LanguageChecker, type ToolSpec } from "../types.js";
-import { relative } from "node:path";
+import { isAbsolute, relative } from "node:path";
 
 export const typescriptChecker: LanguageChecker = {
   id: "typescript",
@@ -59,9 +59,6 @@ export const typescriptChecker: LanguageChecker = {
 };
 
 function toRelative(absOrRel: string, root: string): string {
-  try {
-    return relative(root, absOrRel).replace(/\\/g, "/");
-  } catch {
-    return absOrRel;
-  }
+  if (isAbsolute(absOrRel)) return relative(root, absOrRel).replace(/\\/g, "/");
+  return absOrRel.replace(/\\/g, "/");
 }

@@ -3,7 +3,7 @@
  * 处到处都是 vcs × target 的 switch。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { sanitizeRefName } from "./sanitize.ts";
+import { sanitizeRefName, sanitizePromptInput } from "./sanitize.ts";
 
 function quoteShellArg(value: string): string {
 	return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -24,7 +24,8 @@ export type ReviewTarget =
 		title: string;
 		worktreePath?: string;
 		worktreeRef?: string;
-	};
+	}
+	| { type: "files"; paths: string[] };
 
 export type SmartDefault = "uncommitted" | "baseBranch" | "commit";
 
@@ -184,6 +185,9 @@ export function buildDiffPromptHint(target: ReviewTarget, vcs: ReviewVcs, mergeB
 			// 已强制为 "git"（见上方）。TypeScript 需要穷举处理则留着它。
 			case "mergeRequest":
 				throw new Error(`buildDiffPromptHint: 不应到达的 jj + mergeRequest 路径`);
+			// files 不依赖 VCS，在 git 分支处理。
+			case "files":
+				break;
 		}
 	}
 	switch (target.type) {
@@ -217,6 +221,14 @@ export function buildDiffPromptHint(target: ReviewTarget, vcs: ReviewVcs, mergeB
 				? `${location}。合并基础是 ${safeMergeBase}，运行 \`${git} diff ${safeMergeBase}\` 查看 MR 差异。${readHint}`
 				: `${location}。先运行 \`${git} merge-base HEAD origin/${safeBase}\` 找出合并基础，再运行 \`${git} diff <合并基础>\` 查看 MR 差异。${readHint}`;
 		}
+		case "files": {
+			const fileList = target.paths.map((p) => `- ${JSON.stringify(sanitizePromptInput(p))}`).join("\n");
+			return [
+				`使用 \`read\` 工具逐个读取以下文件进行审查：`,
+				fileList,
+				"如果路径是目录，先用 `ls` 工具列出目录内容，再逐个读取其中的代码文件。",
+			].join("\n");
+		}
 	}
 }
 
@@ -239,6 +251,10 @@ export function getTargetLabel(target: ReviewTarget, vcs: ReviewVcs): string {
 			const symbol = target.provider === "glab" ? "!" : "#";
 			const truncated = target.title.length > 40 ? `${target.title.slice(0, 37)}...` : target.title;
 			return `${kind} ${symbol}${target.id}: ${truncated}`;
+		}
+		case "files": {
+			if (target.paths.length === 1) return `文件 ${target.paths[0]}`;
+			return `${target.paths.length} 个文件`;
 		}
 	}
 }

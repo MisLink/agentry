@@ -51,18 +51,25 @@ interface GolangciOutput {
  * With --output.json.path=stdout --output.text.path=, stdout should be
  * a single JSON object. We try JSON.parse directly — no manual brace matching.
  */
-function parseGolangciJson(stdout: string, projectRoot: string): Diagnostic[] {
+function parseGolangciJson(stdout: string, stderr: string, projectRoot: string): Diagnostic[] {
 	const trimmed = stdout.trim();
-	if (!trimmed) return [];
+	if (!trimmed) {
+		throw new Error(`golangci-lint exited non-zero without JSON output${stderr ? `: ${stderr}` : ""}`);
+	}
 
 	let data: GolangciOutput;
 	try {
 		data = JSON.parse(trimmed);
 	} catch {
-		return [];
+		throw new Error(`golangci-lint output looks like JSON but failed to parse: ${stderr || stdout.slice(0, 200)}`);
 	}
 
-	if (!data.Issues?.length) return [];
+	if (!Array.isArray(data.Issues)) {
+		throw new Error("golangci-lint JSON output is missing the Issues array");
+	}
+	if (data.Issues.length === 0) {
+		throw new Error(`golangci-lint exited non-zero but reported no issues${stderr ? `: ${stderr}` : ""}`);
+	}
 
 	return data.Issues.map((issue) => {
 		const file = isAbsolute(issue.Pos.Filename)
@@ -107,7 +114,7 @@ function parseGoVetJson(stdout: string, projectRoot: string): Diagnostic[] {
 		try {
 			data = JSON.parse(trimmed);
 		} catch {
-			continue;
+			throw new Error(`go vet -json output line could not be parsed: ${trimmed.slice(0, 200)}`);
 		}
 
 		for (const pkgAnalyzers of Object.values(data)) {
@@ -176,12 +183,13 @@ export const goChecker: LanguageChecker = {
 		return ["vet", "-json", "./..."];
 	},
 
-	parseOutput(stdout, stderr, exitCode, projectRoot) {
+	parseOutput(stdout, stderr, exitCode, projectRoot, tool?: ToolSpec) {
 		if (exitCode === 0) return [];
 
-		// golangci-lint: detect by stdout content (JSON goes to stdout only)
-		if (stdout.includes('"FromLinter"') || stdout.includes('"Issues"')) {
-			return parseGolangciJson(stdout, projectRoot);
+		// golangci-lint always runs with JSON output configured. Dispatch by the
+		// actual tool used, not by brittle stdout key-string detection.
+		if (tool?.toolId === "golangci-lint") {
+			return parseGolangciJson(stdout, stderr, projectRoot);
 		}
 
 		// go vet -json: NDJSON on stdout, parse line by line
