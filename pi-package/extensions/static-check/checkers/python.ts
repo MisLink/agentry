@@ -15,8 +15,7 @@ import { makeDiagnostic, type Diagnostic, type LanguageChecker, type ToolSpec } 
 import { isAbsolute, relative } from "node:path";
 
 /**
- * Detect a file finder (fd or find) + python3 for the ast.parse fallback.
- * fd is preferred because it respects .gitignore automatically.
+ * Detect python3/python for the ast.parse fallback.
  * Python is searched in venv first, then system PATH.
  */
 async function detectAstFallback(projectRoot: string): Promise<ToolSpec | null> {
@@ -26,54 +25,57 @@ async function detectAstFallback(projectRoot: string): Promise<ToolSpec | null> 
     ?? await findSystemBin("python");
   if (!python) return null;
 
-  const fd = await findSystemBin("fd");
-  if (fd) {
-    return {
-      cmd: fd.cmd,
-      toolId: "python-ast-fd",
-      tier: "system",
-      displayName: `ast.parse via fd + ${python.displayName}`,
-      metadata: { pythonCmd: python.cmd },
-    };
-  }
-
-  const find = await findSystemBin("find");
-  if (!find) return null;
   return {
-    cmd: "find",
-    toolId: "python-ast-find",
-    tier: "system",
-    displayName: `ast.parse via find + ${python.displayName}`,
-    metadata: { pythonCmd: python.cmd },
+    cmd: python.cmd,
+    toolId: "python-ast",
+    tier: python.tier,
+    displayName: `ast.parse via ${python.displayName}`,
   };
 }
 
+const PYTHON_EXCLUDED_DIRS = [
+  ".venv", "venv", ".env", "env",
+  "node_modules", "__pycache__", "vendor", "site-packages", ".git", ".hg",
+];
+
 /**
- * Inline Python one-liner for ast.parse. Receives file paths as sys.argv[1:].
- * Used with `find -exec python3 -c '...' {} +` so find handles discovery.
+ * Inline Python script for ast.parse. Receives file or directory targets as
+ * sys.argv[1:]. Directory targets are walked recursively with common generated
+ * / dependency directories excluded.
  */
 const AST_PARSE_SCRIPT = [
-  "import ast,sys",
+  "import ast,os,sys",
+  `EXCLUDED=${JSON.stringify(PYTHON_EXCLUDED_DIRS)}`,
+  "def iter_files(target):",
+  " if os.path.isfile(target):",
+  "  if target.endswith('.py'): yield target",
+  "  return",
+  " for root, dirs, files in os.walk(target):",
+  "  dirs[:] = [d for d in dirs if d not in EXCLUDED]",
+  "  for name in files:",
+  "   if name.endswith('.py'): yield os.path.join(root, name)",
   "rc=0",
-  "for f in sys.argv[1:]:",
-  " try:",
-  '  ast.parse(open(f,encoding="utf-8",errors="replace").read(),f)',
-  " except SyntaxError as e:",
-  '  print(f"{e.filename or f}:{e.lineno or 1}:{e.offset or 1}: error: {e.msg or \'SyntaxError\'}");rc=1',
+  "for target in sys.argv[1:] or ['.']:",
+  " for f in iter_files(target):",
+  "  try:",
+  '   ast.parse(open(f,encoding="utf-8",errors="replace").read(),f)',
+  "  except SyntaxError as e:",
+  '   print(f"{e.filename or f}:{e.lineno or 1}:{e.offset or 1}: error: {e.msg or \'SyntaxError\'}");rc=1',
   "sys.exit(rc)",
 ].join("\n");
 
-/** find exclusions for common non-source directories. */
-const FIND_EXCLUDES = [
-  ".venv", "venv", ".env", "env",
-  "node_modules", "__pycache__", "vendor", "site-packages", ".git", ".hg",
-].flatMap((d) => ["-not", "-path", `*/${d}/*`]);
+function pythonTargets(projectRoot: string, scopedFiles?: string[]): string[] {
+  if (!scopedFiles || scopedFiles.length === 0) return ["."];
 
-/** fd exclusions (fd uses -E for each pattern). */
-const FD_EXCLUDES = [
-  ".venv", "venv", ".env", "env",
-  "node_modules", "__pycache__", "vendor", "site-packages",
-].flatMap((d) => ["-E", d]);
+  const targets = new Set<string>();
+  for (const file of scopedFiles) {
+    const rel = isAbsolute(file) ? relative(projectRoot, file) : file;
+    if (!rel || rel.startsWith("..")) continue;
+    targets.add(rel.replace(/\\/g, "/"));
+  }
+
+  return targets.size > 0 ? [...targets].sort() : ["."];
+}
 
 export const pythonChecker: LanguageChecker = {
   id: "python",
@@ -93,27 +95,11 @@ export const pythonChecker: LanguageChecker = {
     );
   },
 
-  buildArgs(projectRoot, tool) {
-    const pythonCmd = tool.metadata?.pythonCmd ?? "python3";
+  buildArgs(projectRoot, tool, scopedFiles) {
+    const targets = pythonTargets(projectRoot, scopedFiles);
 
-    // fd: respects .gitignore automatically, -X batches all files into one call
-    if (tool.toolId === "python-ast-fd") {
-      return [
-        "-e", "py",
-        ...FD_EXCLUDES,
-        "--search-path", projectRoot,
-        "-X", pythonCmd, "-c", AST_PARSE_SCRIPT,
-      ];
-    }
-
-    // find fallback
-    if (tool.toolId === "python-ast-find") {
-      return [
-        projectRoot,
-        "-name", "*.py",
-        ...FIND_EXCLUDES,
-        "-exec", pythonCmd, "-c", AST_PARSE_SCRIPT, "{}", "+",
-      ];
+    if (tool.toolId === "python-ast") {
+      return ["-c", AST_PARSE_SCRIPT, ...targets];
     }
 
     const isPyright =
@@ -121,13 +107,13 @@ export const pythonChecker: LanguageChecker = {
       tool.cmd.includes("pyright");
 
     if (isPyright) {
-      const flags = ["--outputjson"];
-      if (tool.tier === "runner") return ["pyright", ...flags, projectRoot];
-      return [...flags, projectRoot];
+      const flags = ["--outputjson", ...targets];
+      if (tool.tier === "runner") return ["pyright", ...flags];
+      return flags;
     }
 
     // mypy
-    const flags = ["--show-column-numbers", "--no-error-summary", "--no-pretty", "."];
+    const flags = ["--show-column-numbers", "--no-error-summary", "--no-pretty", ...targets];
     if (tool.tier === "runner") return ["mypy", ...flags];
     return flags;
   },

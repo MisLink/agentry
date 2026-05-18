@@ -74,14 +74,13 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
 
   /**
    * Group the modified files by (checker, projectRoot).
-   * Returns a flat array of {checker, projectRoot} pairs — ready for
-   * parallel execution.
+   * Returns scoped file sets so automatic checks can avoid scanning the
+   * entire project when a checker supports narrower targets.
    */
   async function findAffectedProjects(
     modifiedFiles: Set<string>,
-  ): Promise<Array<{ checker: LanguageChecker; projectRoot: string }>> {
-    const seen = new Set<string>();
-    const result: Array<{ checker: LanguageChecker; projectRoot: string }> = [];
+  ): Promise<Array<{ checker: LanguageChecker; projectRoot: string; files: string[] }>> {
+    const grouped = new Map<string, { checker: LanguageChecker; projectRoot: string; files: string[]; seenFiles: Set<string> }>();
 
     for (const filePath of modifiedFiles) {
       const checker = getCheckerForFile(filePath);
@@ -95,13 +94,18 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
       if (!projectRoot) continue;
 
       const key = `${checker.id}:${projectRoot}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-
-      result.push({ checker, projectRoot });
+      let entry = grouped.get(key);
+      if (!entry) {
+        entry = { checker, projectRoot, files: [], seenFiles: new Set() };
+        grouped.set(key, entry);
+      }
+      if (!entry.seenFiles.has(filePath)) {
+        entry.seenFiles.add(filePath);
+        entry.files.push(filePath);
+      }
     }
 
-    return result;
+    return [...grouped.values()].map(({ checker, projectRoot, files }) => ({ checker, projectRoot, files }));
   }
 
   // ── Per-project check ─────────────────────────────────────────────────────
@@ -115,6 +119,7 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
     projectRoot: string,
     ctx: ExtensionContext,
     signal?: AbortSignal,
+    scopedFiles?: string[],
   ): Promise<Diagnostic[] | null> {
     // Tool detection (cached implicitly by OS path caching)
     let tool: ToolSpec | null;
@@ -137,7 +142,7 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
       return null;
     }
 
-    const args = checker.buildArgs(projectRoot, tool);
+    const args = checker.buildArgs(projectRoot, tool, scopedFiles);
     const { stdout, stderr, code } = await runTool(
       tool.cmd,
       args,
@@ -146,7 +151,7 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
       signal,
     );
 
-    return checker.parseOutput(stdout, stderr, code, projectRoot, tool);
+    return checker.parseOutput(stdout, stderr, code, projectRoot, tool, scopedFiles);
   }
 
   function errorMessage(err: unknown): string {
@@ -197,9 +202,9 @@ export default function staticCheckExtension(pi: ExtensionAPI): void {
       // per-checker failures here so one broken checker doesn't discard other
       // results, but failed checkers never advance baseline or appear clean.
       const checkResults = await Promise.all(
-        affected.map(async ({ checker, projectRoot }) => {
+        affected.map(async ({ checker, projectRoot, files }) => {
           try {
-            const all = await runCheck(checker, projectRoot, ctx, effectiveSignal);
+            const all = await runCheck(checker, projectRoot, ctx, effectiveSignal, files);
             if (all === null) return { kind: "missing" as const }; // tool missing
 
             // Step 5: delta vs. last check.

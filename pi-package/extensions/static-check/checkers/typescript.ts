@@ -26,14 +26,18 @@ export const typescriptChecker: LanguageChecker = {
   },
 
   buildArgs(_projectRoot, tool) {
+    // tsc cannot combine --project with an explicit file list. Keep the
+    // project-level check for correctness, then filter diagnostics to scoped
+    // files in parseOutput() for automatic runs.
     const flags = ["--noEmit", "--pretty", "false"];
     // For runner (npx), prepend the real tool name.
     return tool.tier === "runner" ? ["tsc", ...flags] : flags;
   },
 
-  parseOutput(stdout, stderr, exitCode, projectRoot) {
+  parseOutput(stdout, stderr, exitCode, projectRoot, _tool, scopedFiles) {
     if (exitCode === 0) return [];
 
+    const scoped = scopedFileSet(projectRoot, scopedFiles);
     const diagnostics: Diagnostic[] = [];
     const output = [stdout, stderr].filter(Boolean).join("\n");
 
@@ -43,9 +47,11 @@ export const typescriptChecker: LanguageChecker = {
     let m: RegExpExecArray | null;
     while ((m = re.exec(output)) !== null) {
       const [, rawFile, line, col, sev, msg] = m;
+      const file = toRelative(rawFile.trim(), projectRoot);
+      if (scoped && !scoped.has(file)) continue;
       diagnostics.push(
         makeDiagnostic(
-          toRelative(rawFile.trim(), projectRoot),
+          file,
           parseInt(line, 10),
           parseInt(col, 10),
           msg.trim(),
@@ -58,7 +64,18 @@ export const typescriptChecker: LanguageChecker = {
   },
 };
 
+function scopedFileSet(root: string, scopedFiles?: string[]): Set<string> | null {
+  if (!scopedFiles || scopedFiles.length === 0) return null;
+  const files = new Set<string>();
+  for (const file of scopedFiles) {
+    const rel = toRelative(file, root);
+    if (!rel || rel.startsWith("..")) continue;
+    files.add(rel);
+  }
+  return files.size > 0 ? files : null;
+}
+
 function toRelative(absOrRel: string, root: string): string {
-  if (isAbsolute(absOrRel)) return relative(root, absOrRel).replace(/\\/g, "/");
-  return absOrRel.replace(/\\/g, "/");
+  const rel = isAbsolute(absOrRel) ? relative(root, absOrRel) : absOrRel;
+  return rel.replace(/\\/g, "/").replace(/^\.\//, "");
 }

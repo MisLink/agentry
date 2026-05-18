@@ -13,9 +13,9 @@
         "+pi-package/extensions/rtk.ts",
         "-pi-package/extensions/web-search/index.ts",
         "-pi-package/extensions/questionnaire/index.ts",
-        "-pi-package/extensions/plan-tracker/index.ts",
         "-pi-package/extensions/caveman/index.ts",
-        "-pi-package/extensions/btw/index.ts"
+        "-pi-package/extensions/btw/index.ts",
+        "+pi-package/extensions/plan-tracker/index.ts"
       ],
       "skills": []
     },
@@ -23,8 +23,7 @@
     "npm:pi-mcp-adapter",
     "npm:pi-autoresearch",
     "npm:@eko24ive/pi-ask",
-    "npm:pi-context-usage",
-    "npm:@plannotator/pi-extension"
+    "npm:pi-context-usage"
   ],
   "hideThinkingBlock": false,
   "theme": "dark",

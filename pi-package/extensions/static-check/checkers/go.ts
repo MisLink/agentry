@@ -9,8 +9,9 @@
  *   2. go vet (always available when go.mod exists)
  */
 
+import { execFile } from "node:child_process";
 import { access, constants } from "node:fs/promises";
-import { join, relative, isAbsolute } from "node:path";
+import { dirname, join, relative, isAbsolute } from "node:path";
 import { findSystemBin } from "../tool-finder.js";
 import { makeDiagnostic, type Diagnostic, type LanguageChecker, type ToolSpec } from "../types.js";
 
@@ -33,6 +34,20 @@ async function hasGolangciConfig(projectRoot: string): Promise<boolean> {
 	return false;
 }
 
+async function detectGolangciMajorVersion(cmd: string): Promise<number | null> {
+	return new Promise((resolve) => {
+		const child = execFile(cmd, ["version"], { timeout: 3_000 }, (err, stdout, stderr) => {
+			if (err) {
+				resolve(null);
+				return;
+			}
+			const match = `${stdout}\n${stderr}`.match(/\bversion\s+v?(\d+)\./i);
+			resolve(match ? parseInt(match[1], 10) : null);
+		});
+		child.on("error", () => resolve(null));
+	});
+}
+
 // ── golangci-lint JSON parsing ─────────────────────────────────────────────
 
 interface GolangciIssue {
@@ -48,8 +63,9 @@ interface GolangciOutput {
 
 /**
  * Parse golangci-lint JSON output.
- * With --output.json.path=stdout --output.text.path=, stdout should be
- * a single JSON object. We try JSON.parse directly — no manual brace matching.
+ * With --output.json.path=stdout --output.text.path= --show-stats=false,
+ * stdout should be a single JSON object. We try JSON.parse directly — no
+ * manual brace matching.
  */
 function parseGolangciJson(stdout: string, stderr: string, projectRoot: string): Diagnostic[] {
 	const trimmed = stdout.trim();
@@ -148,6 +164,20 @@ function parseGoVetJson(stdout: string, projectRoot: string): Diagnostic[] {
 	return diagnostics;
 }
 
+function goPackageTargets(projectRoot: string, scopedFiles?: string[]): string[] {
+	if (!scopedFiles || scopedFiles.length === 0) return ["./..."];
+
+	const dirs = new Set<string>();
+	for (const file of scopedFiles) {
+		const rel = isAbsolute(file) ? relative(projectRoot, file) : file;
+		if (!rel || rel.startsWith("..")) continue;
+		const dir = dirname(rel).replace(/\\/g, "/");
+		dirs.add(dir === "." ? "." : `./${dir}`);
+	}
+
+	return dirs.size > 0 ? [...dirs].sort() : ["./..."];
+}
+
 // ── Checker implementation ─────────────────────────────────────────────────
 
 export const goChecker: LanguageChecker = {
@@ -160,27 +190,39 @@ export const goChecker: LanguageChecker = {
 		const golangci = await findSystemBin("golangci-lint");
 		if (golangci) {
 			const hasConfig = await hasGolangciConfig(projectRoot);
+			const majorVersion = await detectGolangciMajorVersion(golangci.cmd);
+			const versionLabel = majorVersion ? ` v${majorVersion}` : "";
 			return {
 				...golangci,
 				toolId: "golangci-lint",
-				displayName: hasConfig ? "golangci-lint (with config)" : "golangci-lint",
+				displayName: hasConfig ? `golangci-lint${versionLabel} (with config)` : `golangci-lint${versionLabel}`,
+				metadata: majorVersion ? { majorVersion: String(majorVersion) } : undefined,
 			};
 		}
 		return await findSystemBin("go");
 	},
 
-	buildArgs(_projectRoot, tool) {
+	buildArgs(projectRoot, tool, scopedFiles) {
+		const targets = goPackageTargets(projectRoot, scopedFiles);
 		if (tool.toolId === "golangci-lint") {
-			// JSON to stdout, suppress default text output
+			const majorVersion = tool.metadata?.majorVersion;
+			if (majorVersion === "1") {
+				// golangci-lint v1 uses the legacy output flag.
+				return ["run", "--out-format=json", "--timeout=1m", ...targets];
+			}
+
+			// golangci-lint v2: JSON to stdout, suppress default text output and
+			// trailing stats (e.g. "1 issues:") so stdout remains parseable JSON.
 			return [
 				"run",
 				"--output.json.path=stdout",
 				"--output.text.path=",
+				"--show-stats=false",
 				"--timeout=1m",
-				"./...",
+				...targets,
 			];
 		}
-		return ["vet", "-json", "./..."];
+		return ["vet", "-json", ...targets];
 	},
 
 	parseOutput(stdout, stderr, exitCode, projectRoot, tool?: ToolSpec) {

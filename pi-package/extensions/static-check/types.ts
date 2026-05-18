@@ -104,13 +104,19 @@ export interface LanguageChecker {
    * Build the argv to pass when executing the tool.
    * Does NOT include the executable itself (that is ToolSpec.cmd).
    *
+   * scopedFiles is provided for automatic post-edit checks and contains the
+   * absolute paths edited this turn within projectRoot. Manual /staticcheck
+   * runs pass undefined so checkers can scan the full project.
+   *
    * For runner-tier tools (e.g. npx), include the tool name as first arg:
    *   tier === "runner" → ["tsc", "--noEmit"] rather than just ["--noEmit"]
    */
-  buildArgs(projectRoot: string, tool: ToolSpec): string[];
+  buildArgs(projectRoot: string, tool: ToolSpec, scopedFiles?: string[]): string[];
   /**
    * Parse raw tool output into structured diagnostics.
    * Called regardless of exit code — check exitCode if needed.
+   * scopedFiles mirrors buildArgs and lets project-wide tools filter noisy
+   * diagnostics during automatic post-edit checks.
    * Return [] for a clean run.
    */
   parseOutput(
@@ -119,6 +125,7 @@ export interface LanguageChecker {
     exitCode: number,
     projectRoot: string,
     tool?: ToolSpec,
+    scopedFiles?: string[],
   ): Diagnostic[];
 }
 
